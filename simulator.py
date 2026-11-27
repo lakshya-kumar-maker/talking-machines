@@ -98,13 +98,18 @@ WEAR_FAST = 5 * 60          # an injected bearing failure: wear to breakdown in 
 GLUE_DROP = 20 / 240        # °C per second once the glue heater fails (crosses 150 °C after 3 min)
 
 
-def simulate(minutes, seed, inject=None):
-    """inject(t) -> list of fault names (keys of INJECTABLE) to start at second t; used for live demos."""
+VIB_TRIP, VIB_HOLD = 7.2, 10    # the filler's PLC rule (plc_programs.py): vibration above 7.2 mm/s for 10 s
+
+
+def simulate(minutes, seed, inject=None, events=None):
+    """inject(t) -> list of fault names (keys of INJECTABLE) to start at second t; used for live demos.
+    events: optional dict; gets "filler_trip" = the second the filler's PLC rule really tripped."""
     rng = random.Random(seed)
     tags = make_tags(rng, seed)
     JAM, JAMS, WEAR, FAIL, ZONES = timeline(seed)
     JAMS, ZONES = list(JAMS), list(ZONES)
-    glue_fail_from = labeller_failed_at = None
+    glue_fail_from = labeller_failed_at = filler_tripped_at = None
+    vib_over = 0
     st = {m: {"temp": 38.0, "count": 0.0, "cases": 0.0, "layers": 0.0} for m in MACHINES}
     cb = {"buffer": 0.0, "done": 0.0, "phase": 0.0}
     for t in range(minutes * 60):
@@ -123,7 +128,11 @@ def simulate(minutes, seed, inject=None):
         labeller_failed = labeller_failed_at is not None
         wear = min(1.0, max(0.0, (t - WEAR) / (FAIL - WEAR)))
         # once another failure has stopped the line, the filler isn't running and can't break down itself
-        filler_failed = t >= FAIL and not (labeller_failed and labeller_failed_at < FAIL)
+        # the filler trips by its own PLC rule (vibration above the limit for 10 s); the schedule is only a backstop
+        backstop = t >= FAIL + 90 and not (labeller_failed and labeller_failed_at < FAIL)
+        if filler_tripped_at is None and backstop:
+            filler_tripped_at = t
+        filler_failed = filler_tripped_at is not None and t >= filler_tripped_at
         capper_jammed = any(s0 <= t < s0 + d for s0, d in JAMS) and not filler_failed and not labeller_failed
         line_down = filler_failed or labeller_failed
         row = {}
@@ -150,8 +159,14 @@ def simulate(minutes, seed, inject=None):
             current = (2.0 + 9.0 * load + extra_i + rng.gauss(0, 0.15)) if running else rng.gauss(0.3, 0.05)
             temp_target = 35 + 25 * load + (28 * wear if m == "filler" else 0)
             s["temp"] += (temp_target - s["temp"]) / 240 + rng.gauss(0, 0.05)
-            vib = (1.4 + 0.6 * load + (6 * wear ** 1.5 if m == "filler" else 0) + abs(rng.gauss(0, 0.2))) \
+            vib = (1.4 + 0.6 * load + (5.4 * wear ** 1.5 if m == "filler" else 0) + abs(rng.gauss(0, 0.2))) \
                 if running else abs(rng.gauss(0.1, 0.05))
+            if m == "filler" and filler_tripped_at is None:           # the PLC's TON_VIB timer
+                vib_over = vib_over + 1 if vib > VIB_TRIP else 0
+                if vib_over >= VIB_HOLD:
+                    filler_tripped_at = t + 1
+                    if events is not None:
+                        events["filler_trip"] = t + 1
             s["count"] += speed / 60
             vals = {"running": int(running), "fault": int(fault), "speed": round(speed, 1),
                     "count": int(s["count"]), "motor_current": round(max(current, 0), 2),
@@ -255,19 +270,26 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5020)
     a = ap.parse_args()
-    import plc
-    plc.exit_with_parent()
     os.makedirs("data", exist_ok=True)
     start = datetime(2026, 11, 27, 9, 0, 0)
     out = writer = tags = cols = server = regmap = None
     inject = None if a.fast else Injector(start)
     try:
-        for t, row, tags in simulate(a.minutes, a.seed, inject):
+        events, recorded = {}, False
+        for t, row, tags in simulate(a.minutes, a.seed, inject, events):
+            if not recorded and "filler_trip" in events and os.path.exists("data/answers.json"):
+                recorded = True                                # the real moment the PLC rule tripped
+                with open("data/answers.json", encoding="utf-8") as f:
+                    ans = json.load(f)
+                ans["events"]["filler_fails"] = str(start + timedelta(seconds=events["filler_trip"]))
+                with open("data/answers.json", "w", encoding="utf-8") as f:
+                    json.dump(ans, f, indent=1)
             if cols is None:
                 cols = list(row)
                 random.Random(a.seed).shuffle(cols)            # column/register order changes with the seed
                 write_answers(tags, a.seed, start)
                 if a.plc:
+                    import plc
                     kinds = {v["tag"]: v["kind"] for v in tags.values()}
                     regmap = plc.build_map(cols, kinds)
                     plc.save_map(regmap)

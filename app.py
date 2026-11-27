@@ -235,6 +235,46 @@ def live():
             else:
                 st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
 
+    # time until failure: the drifting signal's trend, extended to the limit in the machine's PLC program
+    preds = line.predictions(df, dec)
+    if line.PRED_ERROR:
+        st.error(f"The time-to-failure forecast couldn't run: {line.PRED_ERROR}. Check that prediction.py and "
+                 "translator.py are in the project folder.")
+    if preds:
+        import prediction
+        st.subheader("⏱ Time until failure")
+        for p in preds[:2]:
+            names = line.decoder.MACHINE_NAMES
+            left = max(p["minutes"], 0)
+            st.error(f"**{names[p['machine']]} predicted to trip at about {p['at']:%H:%M}** "
+                     f"(in ~{left:.0f} min · likely between {p['low_at']:%H:%M} and {p['high_at']:%H:%M})")
+            hist = df[["timestamp", p["tag"]]].tail(15 * 60).copy()
+            hist["value"] = hist[p["tag"]].rolling(60, min_periods=1).mean()
+            hist["Line"] = "Measured (1-min average)"
+            fut = prediction.curve(p)
+            fut = fut[fut["timestamp"] >= hist["timestamp"].iloc[0]]
+            fut["Line"] = "Forecast"
+            both = pd.concat([hist[["timestamp", "value", "Line"]], fut])
+            colors = alt.Scale(domain=["Measured (1-min average)", "Forecast"])
+            lines_ = alt.Chart(both).mark_line().encode(
+                x=alt.X("timestamp:T", title=None), y=alt.Y("value:Q", title=f"{p['name']} ({p['unit']})"),
+                color=alt.Color("Line:N", scale=colors, legend=alt.Legend(orient="bottom", title=None)),
+                strokeDash=alt.condition(alt.datum.Line == "Forecast", alt.value([6, 4]), alt.value([1, 0])))
+            limit = alt.Chart(pd.DataFrame({"y": [p["limit"]], "t": [f"PLC trip limit {p['limit']:g} {p['unit']}"]}))
+            rule = limit.mark_rule(color="#e5484d").encode(y="y:Q")
+            label = limit.mark_text(align="left", dx=4, dy=-6, color="#e5484d").encode(
+                y="y:Q", x=alt.value(0), text="t:N")
+            st.altair_chart((lines_ + rule + label).properties(height=230), use_container_width=True)
+            word = "above" if p["op"] in (">", ">=") else "below"
+            hold = f" for {p['hold_s']:g} s" if p["hold_s"] else ""
+            cost = line.rupees(round(line.downtime(df, dec, line.PRICE)["rated"], -1) * line.PRICE) \
+                if line.downtime(df, dec, line.PRICE) else None
+            st.caption(f"Now {p['now_value']:.1f} {p['unit']} (normal {p['normal']:.1f}). The limit comes from the "
+                       f"machine's own PLC program ({p['file']}: trips if {p['name'].lower()} is {word} "
+                       f"{p['limit']:g} {p['unit']}{hold}). Trend fitted on the drift so far; the range comes from "
+                       f"fitting a curve and a straight line on different parts of it."
+                       + (f" Once it trips, the line loses about {cost} per minute." if cost else ""))
+
     # what the stoppages have cost so far
     d = line.downtime(df, dec, line.PRICE)
     if d:

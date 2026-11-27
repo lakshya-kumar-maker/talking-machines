@@ -395,7 +395,6 @@ def summarise(translation):
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")    # Windows consoles/pipes default to cp1252
     names = load_names()
     files = sys.argv[1:] or [os.path.join("data/plc_programs", f) for f in sorted(os.listdir("data/plc_programs"))]
     for path in files:
@@ -408,3 +407,49 @@ if __name__ == "__main__":
             print("   → " + r["english"])
         if t["unknown"]:
             print(f"\n   not decoded (no live data): {', '.join(t['unknown'])}")
+
+
+# ── trip limits: the numbers in the code that make a machine raise its own fault ───────────
+def trip_limits(names, folder="data/plc_programs"):
+    """{machine: [{"tag", "op", "value", "hold_s", "file"}]} for every simple comparison that leads to the
+    machine's own fault, e.g. the filler: vibration > 7.2 held for 10 s. Read from the parsed code."""
+    out = {}
+    if not os.path.isdir(folder):
+        return out
+    for f in sorted(os.listdir(folder)):
+        if not f.endswith(".st"):
+            continue
+        with open(os.path.join(folder, f), encoding="utf-8") as fh:
+            rules = [r for _, r in split_rules(fh.read())]
+        machine = which_machine([(None, r) for r in rules], names)
+        if not machine:
+            continue
+        timers = {}
+        for r in rules:
+            if r[0] == "call" and "IN" in r[2] and "PT" in r[2]:
+                m = re.match(r"T#(\d+)(MS|S|M|H)", r[2]["PT"][1], re.I)
+                secs = int(m.group(1)) * {"MS": 0.001, "S": 1, "M": 60, "H": 3600}[m.group(2).upper()]
+                timers[r[1]] = (r[2]["IN"], secs)
+
+        def comparisons(node, hold):
+            if node[0] == "cmp" and node[2][0] == "tag" and node[3][0] == "num":
+                return [(node[2][1], node[1], node[3][1], hold)]
+            if node[0] in ("and", "or"):
+                return comparisons(node[1], hold) + comparisons(node[2], hold)
+            if node[0] == "tag" and node[1].endswith(".Q") and node[1][:-2] in timers:
+                cond, secs = timers[node[1][:-2]]
+                return comparisons(cond, secs)
+            return []
+
+        for r in rules:
+            if r[0] != "if":
+                continue
+            for cond, body in r[1]:
+                raises = any(s[0] == "set" and names.get(s[1], {}).get("signal") == "fault"
+                             and names[s[1]]["machine"] == machine and s[2] == ("bool", True) for s in body)
+                if raises:
+                    for tag, op, value, hold in comparisons(cond, 0):
+                        if tag in names and names[tag]["machine"] == machine:
+                            out.setdefault(machine, []).append(
+                                {"tag": tag, "op": op, "value": value, "hold_s": hold, "file": f})
+    return out

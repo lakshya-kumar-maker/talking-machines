@@ -161,6 +161,7 @@ def facts(df, dec, warns):
     lines.append("Warnings so far: " + ("; ".join(warns) if warns else "none"))
     lines.append(cost_text(downtime(df, dec, PRICE), warns))
     lines.append(forest_text(df, dec))
+    lines.append("Time-to-failure forecasts: " + (prediction_text(df, dec) or "no machine is heading for a PLC trip limit."))
     for f, t in program_rules(dec).items():
         if t["machine"]:
             lines.append(f"PLC program {f} ({decoder.MACHINE_NAMES[t['machine']]}): "
@@ -302,6 +303,33 @@ def forest(df, dec):
     return _FOREST[key]
 
 
+_PRED = {}
+PRED_ERROR = None
+
+
+def predictions(df, dec):
+    """Time-until-failure forecasts (prediction.py) towards each machine's PLC trip limit, cached per data."""
+    global PRED_ERROR
+    key = (len(df), str(df["timestamp"].iloc[-1]), tuple(sorted((t, r["signal"]) for t, r in dec.items())))
+    if key not in _PRED:
+        try:
+            import prediction
+            import translator
+            _PRED.clear()
+            _PRED[key] = prediction.forecasts(df, dec, translator.trip_limits(dec))
+            PRED_ERROR = None
+        except Exception as e:
+            PRED_ERROR = f"{type(e).__name__}: {e}"
+            return []
+    return _PRED[key]
+
+
+def prediction_text(df, dec, machine=None):
+    import prediction
+    found = [p for p in predictions(df, dec) if machine in (None, p["machine"])]
+    return " ".join(prediction.describe(p, decoder.MACHINE_NAMES) for p in found)
+
+
 def forest_text(df, dec):
     _, found = forest(df, dec)
     names = decoder.MACHINE_NAMES
@@ -324,6 +352,9 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
     mu, sd = healthy.mean(), healthy.std()
     sp, st = spans(df, dec), status(df, dec)
     fz = {f["machine"]: f for f in forest(df, dec)[1]}
+    fc = {}
+    for p in predictions(df, dec):
+        fc.setdefault(p["machine"], p)
     cards = []
     for i, m in enumerate(MACHINE_ORDER):
         sig = by_machine(dec).get(m, {})
@@ -391,6 +422,9 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
         elif not changed:
             severity = "Medium"
             title = f"{names[m]}: unusual pattern (early hint)"
+        elif m in fc:
+            severity = "High"
+            title = f"{names[m]}: likely to trip at about {fc[m]['at']:%H:%M} (in ~{fc[m]['minutes']:.0f} min)"
         elif len(changed) >= 2 or max(c["z"] for c in changed) > 15:
             severity = "High"
             title = f"{names[m]}: likely to fail soon"
@@ -404,7 +438,7 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
         cards.append({"machine": names[m], "title": title, "severity": severity, "confidence": confidence,
                       "changed": changed, "cause": cause, "action": action,
                       "first_seen": changed[0]["since"] if changed else (fz[m]["since"] if m in fz else None),
-                      "forest": fz.get(m),
+                      "forest": fz.get(m), "forecast": fc.get(m) if not row["fault"] else None,
                       "status": "FAULT" if row["fault"] else ("Running" if row["running"] else "Stopped")})
     # knock-on effects: machines that slowed only because another machine had a fault
     return cards
@@ -419,6 +453,9 @@ def explain_card(c):
         f = c["forest"]
         lines.append(f"  • Isolation Forest {'agrees' if c['changed'] else 'noticed it'}: unusual since {f['since']:%H:%M} (score up to {f['score']:.2f}), "
                      f"mainly {f['why']}")
+    if c.get("forecast"):
+        import prediction
+        lines.append("  • Forecast: " + prediction.describe(c["forecast"], decoder.MACHINE_NAMES))
     lines.append(f"  Why: {c['cause']}")
     lines.append(f"  Do: {c['action']}")
     return "\n".join(lines)
@@ -472,7 +509,9 @@ def rule_answer(question, df, dec, warns):
                   or (m == "cobot" and any(w in q for w in ("robot", "arm", "palletis", "palletiz")))), None)
     sp, st = spans(df, dec), status(df, dec)
 
-    if asked and any(w in q for w in ("slow", "stop", "why", "down", "happen")):
+    future = any(w in q for w in ("when will", "how long", "how soon", "time left", "predict", "forecast",
+                                  "will it", "going to"))
+    if asked and not future and any(w in q for w in ("slow", "stop", "why", "down", "happen")):
         mine = sp.get(asked, {})
         trouble = sorted(mine.get("ran slow", []) + mine.get("stopped", []))
         if not trouble:
@@ -523,6 +562,15 @@ def rule_answer(question, df, dec, warns):
     if any(w in q for w in ("cost", "lost", "loss", "money", "rupee", "₹", "how much", "downtime", "production")):
         return cost_text(downtime(df, dec, PRICE), warns), "signals: case packer speed (line output), fault flags of every machine"
 
+    if (future or any(w in q for w in ("until", "remaining", "how much time", "when is", "when does it"))) and \
+            not any(w in q for w in ("program", "plc", "rule", "trip?")):
+        text = prediction_text(df, dec, asked)
+        if text:
+            return text, "signals: the drifting signal's trend, extended to the limit in the machine's PLC program"
+        who = f"the {names[asked].lower()} isn't" if asked else "no machine is"
+        return (f"Right now {who} heading for a PLC trip limit, so there's nothing to forecast. A forecast appears "
+                "once a signal has moved clearly from normal towards its limit.", "signals: all trip-limit signals")
+
     drifting = _drifting(warns)
     faults_now = [m for m in MACHINE_ORDER if st.loc[MACHINE_ORDER.index(m), "fault"]]
 
@@ -567,6 +615,9 @@ def rule_answer(question, df, dec, warns):
                    "heater now." if "glue" in steps else
                    "Vibration rising first and then the motor heating up is a typical sign of a wearing bearing, "
                    "so check it before it fails.")
+            pred = prediction_text(df, dec, m)
+            if pred:
+                why += " " + pred
             fz = {f["machine"]: f for f in forest(df, dec)[1]}.get(m)
             if fz:
                 why += (f" The Isolation Forest, which looks at all its signals together, agrees: unusual since "
