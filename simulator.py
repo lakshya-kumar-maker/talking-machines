@@ -88,17 +88,44 @@ def make_tags(rng, seed):
     return tags
 
 
-def simulate(minutes, seed):
+INJECTABLE = {   # faults a judge can trigger live; each matches a rule in that machine's PLC program
+    "filler_wear": "Filler: bearing wears out (fails in about 5 min)",
+    "glue_heater": "Labeller: glue heater fails (stops below 150 °C, about 3 min)",
+    "capper_jam": "Capper: cap jam (30 s)",
+    "cobot_zone": "Cobot: person walks into its safety zone (1 min)",
+}
+WEAR_FAST = 5 * 60          # an injected bearing failure: wear to breakdown in 5 simulated minutes
+GLUE_DROP = 20 / 240        # °C per second once the glue heater fails (crosses 150 °C after 3 min)
+
+
+def simulate(minutes, seed, inject=None):
+    """inject(t) -> list of fault names (keys of INJECTABLE) to start at second t; used for live demos."""
     rng = random.Random(seed)
     tags = make_tags(rng, seed)
     JAM, JAMS, WEAR, FAIL, ZONES = timeline(seed)
+    JAMS, ZONES = list(JAMS), list(ZONES)
+    glue_fail_from = labeller_failed_at = None
     st = {m: {"temp": 38.0, "count": 0.0, "cases": 0.0, "layers": 0.0} for m in MACHINES}
     cb = {"buffer": 0.0, "done": 0.0, "phase": 0.0}
     for t in range(minutes * 60):
+        for what in (inject(t) if inject else []):
+            if what == "filler_wear" and FAIL > t + WEAR_FAST:
+                WEAR, FAIL = (t, t + WEAR_FAST) if t < WEAR else (WEAR, t + WEAR_FAST)
+            elif what == "glue_heater" and glue_fail_from is None:
+                glue_fail_from = t
+            elif what == "capper_jam":
+                JAMS.append((t, 30))
+            elif what == "cobot_zone":
+                ZONES.append((t, 60))
+        glue = 165.0 if glue_fail_from is None else max(120.0, 165.0 - (t - glue_fail_from) * GLUE_DROP)
+        if glue < 150.0 and labeller_failed_at is None:          # the labeller's PLC rule: glue below 150 °C
+            labeller_failed_at = t
+        labeller_failed = labeller_failed_at is not None
         wear = min(1.0, max(0.0, (t - WEAR) / (FAIL - WEAR)))
-        filler_failed = t >= FAIL
-        capper_jammed = any(s0 <= t < s0 + d for s0, d in JAMS)
-        line_down = filler_failed
+        # once another failure has stopped the line, the filler isn't running and can't break down itself
+        filler_failed = t >= FAIL and not (labeller_failed and labeller_failed_at < FAIL)
+        capper_jammed = any(s0 <= t < s0 + d for s0, d in JAMS) and not filler_failed and not labeller_failed
+        line_down = filler_failed or labeller_failed
         row = {}
         case_rate = 0.0
         for m in MACHINES:
@@ -106,6 +133,8 @@ def simulate(minutes, seed):
             running = not line_down
             fault = False
             if m == "filler" and filler_failed:
+                fault = True
+            if m == "labeller" and labeller_failed:
                 fault = True
             if m == "capper" and capper_jammed:
                 running, fault = False, True
@@ -132,7 +161,7 @@ def simulate(minutes, seed):
             if m == "capper":
                 vals["cap_torque"] = round((1.2 + rng.gauss(0, 0.04)) if running else 0.0, 3)
             if m == "labeller":
-                vals["glue_temp"] = round(165 + rng.gauss(0, 0.6), 2)
+                vals["glue_temp"] = round(glue + rng.gauss(0, 0.6), 2)
             if m == "case_packer":
                 case_rate = speed / 60 / 24                      # cases per second sent to the cobot
                 s["cases"] += case_rate
@@ -181,6 +210,41 @@ def write_answers(tags, seed, start, path="data/answers.json"):
             "cobot_zone_visits": [[at(s0), at(s0 + d)] for s0, d in ZONES]}}, f, indent=1)
 
 
+class Injector:
+    """Reads data/inject.json, which the dashboard writes when someone presses "Break it now".
+    Only requests made after this run started count. Each one is logged in answers.json too."""
+    PATH = "data/inject.json"
+
+    def __init__(self, start):
+        self.start, self.seen = start, None
+        try:
+            with open(self.PATH, encoding="utf-8") as f:
+                self.seen = json.load(f).get("id")
+        except (OSError, ValueError):
+            pass
+
+    def __call__(self, t):
+        try:
+            with open(self.PATH, encoding="utf-8") as f:
+                req = json.load(f)
+        except (OSError, ValueError):
+            return []
+        if req.get("id") == self.seen or req.get("what") not in INJECTABLE:
+            return []
+        self.seen = req["id"]
+        print(f"injected at sim second {t}: {INJECTABLE[req['what']]}", flush=True)
+        try:
+            with open("data/answers.json", encoding="utf-8") as f:
+                ans = json.load(f)
+            ans["events"].setdefault("injected", []).append(
+                {"what": req["what"], "at": str(self.start + timedelta(seconds=t))})
+            with open("data/answers.json", "w", encoding="utf-8") as f:
+                json.dump(ans, f, indent=1)
+        except (OSError, ValueError, KeyError):
+            pass
+        return [req["what"]]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--speed", type=float, default=60, help="simulated seconds per real second")
@@ -194,8 +258,9 @@ def main():
     os.makedirs("data", exist_ok=True)
     start = datetime(2026, 11, 27, 9, 0, 0)
     out = writer = tags = cols = server = regmap = None
+    inject = None if a.fast else Injector(start)
     try:
-        for t, row, tags in simulate(a.minutes, a.seed):
+        for t, row, tags in simulate(a.minutes, a.seed, inject):
             if cols is None:
                 cols = list(row)
                 random.Random(a.seed).shuffle(cols)            # column/register order changes with the seed

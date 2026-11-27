@@ -17,7 +17,7 @@ import line
 PATH = "data/stream.csv"
 MIN_ROWS = 180                      # the decoder needs ~3 simulated minutes before names mean anything
 RUN_MINUTES = 45
-REFRESH = 3                         # seconds between live updates
+REFRESH = 1                       # seconds between live updates
 
 st.set_page_config(page_title="Talking Machines", page_icon="🏭", layout="wide")
 st.markdown("""<style>
@@ -49,7 +49,7 @@ def start_line(speed, seed, mode):
     lp = line_process()
     stop_line()
     os.makedirs("data", exist_ok=True)
-    for f in ("data/stream.csv", "data/plc_map.json"):
+    for f in ("data/stream.csv", "data/plc_map.json", "data/inject.json"):
         if os.path.exists(f):
             os.remove(f)
     args = ["simulator.py", "--speed", str(speed), "--seed", str(seed), "--minutes", str(RUN_MINUTES)]
@@ -104,6 +104,7 @@ with st.sidebar:
                          "read-only, like in a real plant. File: the simulator writes the data file directly.")
     if st.button("▶ Restart line from 09:00", use_container_width=True):
         lp["stopped"] = False
+        st.session_state.pop("inject_log", None)
         start_line(speed, int(seed), mode)
         st.rerun()
     if st.button("■ Stop line", use_container_width=True):
@@ -140,6 +141,39 @@ def current():
     except Exception as e:                           # file being rewritten: try again on the next refresh
         st.info(f"Reading the line… ({e.__class__.__name__})")
         return None
+
+
+# ── live demo: let a judge break a machine ─────────────────────────────────
+INJECT_MIN = 8      # the system learns "normal" from minutes 3-8, so faults can be added after that
+
+with st.sidebar:
+    st.divider()
+    st.header("🔧 Break a machine")
+    st.caption("For a live demo: pick a fault and watch Talking Machines catch it. "
+               "Each one follows a real rule in that machine's PLC program.")
+    import simulator
+    what = st.selectbox("Fault", list(simulator.INJECTABLE), format_func=simulator.INJECTABLE.get,
+                        key="inject_what")
+    _data = current()
+    _minute = ((_data[0]["timestamp"].iloc[-1] - _data[0]["timestamp"].iloc[0]).total_seconds() / 60
+               if _data is not None and len(_data[0]) else 0)
+    _lp = line_process()
+    _live = _lp["proc"] is not None and _lp["proc"].poll() is None
+    if not _live:
+        st.caption("Start the line first (▶ Restart line).")
+    elif _minute < INJECT_MIN and what in ("filler_wear", "glue_heater"):
+        st.caption(f"Available from 09:{INJECT_MIN:02d}: the system is still learning what normal looks like.")
+    elif st.button("💥 Break it now", use_container_width=True, type="primary"):
+        st.session_state["inject_id"] = st.session_state.get("inject_id", 0) + 1
+        import json
+        with open("data/inject.json.tmp", "w", encoding="utf-8") as f:
+            json.dump({"id": f"{time.time():.0f}-{st.session_state['inject_id']}", "what": what}, f)
+        os.replace("data/inject.json.tmp", "data/inject.json")
+        st.session_state["inject_log"] = st.session_state.get("inject_log", []) + [
+            f"{_data[0]['timestamp'].iloc[-1]:%H:%M} · {simulator.INJECTABLE[what].split(' (')[0]}"]
+        st.toast("Fault injected. Watch the Live line tab: the warning comes first, then the stop.", icon="💥")
+    for item in reversed(st.session_state.get("inject_log", [])[-4:]):
+        st.caption("💥 " + item)
 
 
 def clock(df):

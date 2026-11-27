@@ -50,7 +50,43 @@ def status(df, dec):
     return pd.DataFrame(rows)
 
 
+HEATER_DROP = 3.0       # °C below its normal temperature, held for HEATER_HOLD seconds, is a warning
+HEATER_HOLD = 25
+
+
+def _heater_drop(series, base=(3, 8), smooth=30):
+    """(smoothed series, normal value, mask of 'clearly colder than normal') for a heater temperature.
+    A heater is held at one set point, so a drop of a few degrees already means something is wrong;
+    the general drift detector would wait for a much larger change."""
+    sm = series.rolling(smooth, min_periods=1).mean()
+    mu = float(sm.iloc[base[0] * 60:base[1] * 60].mean())
+    held = (sm < mu - HEATER_DROP).rolling(HEATER_HOLD).sum() >= HEATER_HOLD
+    return sm, mu, held
+
+
+def heater_warnings(df, dec):
+    out = []
+    for t, r in dec.items():
+        if r["signal"] != "glue_temp" or len(df) < 8 * 60:
+            continue
+        sm, mu, held = _heater_drop(df[t].reset_index(drop=True))
+        if held.any():
+            i = held.idxmax()
+            out.append(f"{df['timestamp'].iloc[i]:%H:%M}  {r['name']} down {abs((sm[i] - mu) / mu * 100):.1f}%")
+    return out
+
+
 def warning_lines(path, dec, window_s=180, top=3):
+    lines = _drift_lines(path, dec, window_s, top)
+    try:
+        df = pd.read_csv(SNAP if os.path.exists(SNAP) else path, parse_dates=["timestamp"])
+        lines += heater_warnings(df, dec)
+    except Exception:
+        pass
+    return sorted(lines, key=lambda l: l[:5])
+
+
+def _drift_lines(path, dec, window_s=180, top=3):
     """The same grouped warnings as warning.py prints, returned as text lines."""
     names = {t: r["name"] for t, r in dec.items()}
     alerts = warning.drift_warnings(SNAP if os.path.exists(SNAP) else path, names=names)
@@ -273,11 +309,23 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
                 changed.append({"signal": LABEL[s], "key": s, "since": since, "normal": round(mu[t], 2),
                                 "now": round(now_v, 2), "unit": dec[t]["unit"],
                                 "change_pct": round((now_v - mu[t]) / abs(mu[t]) * 100, 1), "z": round(z[held].iloc[-1], 1)})
+        if "glue_temp" in sig:                  # a heater going cold is a problem even while the machine runs
+            t = sig["glue_temp"]
+            hs, hmu, held = _heater_drop(ts[t], base)
+            if held.any():
+                now_v = hs.iloc[-1]
+                changed.append({"signal": LABEL["glue_temp"], "key": "glue_temp", "since": held.idxmax(),
+                                "normal": round(hmu, 2), "now": round(now_v, 2), "unit": dec[t]["unit"],
+                                "change_pct": round((now_v - hmu) / abs(hmu) * 100, 1), "z": 20.0})
         changed.sort(key=lambda c: c["since"])
         if not changed and not row["fault"]:
             continue
         keys = [c["key"] for c in changed]
-        if keys[:1] == ["vibration"] and len(keys) > 1:
+        if "glue_temp" in keys:
+            cause = ("The glue heater is cooling down: the heater or its temperature controller is failing. "
+                     "Its PLC program stops the labeller when the glue falls below 150 °C.")
+            action = "Check the labeller glue heater element, fuse and temperature controller; replace what has failed."
+        elif keys[:1] == ["vibration"] and len(keys) > 1:
             cause = "Vibration rose first, then the motor drew more current and heated up: the typical pattern of a wearing bearing or misalignment."
             action = f"Inspect the {names[m].lower()} motor bearing and alignment; plan a stop before it fails."
         elif "vibration" in keys:
@@ -334,7 +382,7 @@ def _drifting(warns):
     for w in warns:
         for part in w[7:].split(", "):
             part = part.split(" (+")[0]
-            if " up " in part:
+            if " up " in part or "glue heater temperature down" in part:      # a cooling glue heater is a warning too
                 m = next((m for m in MACHINE_ORDER if part.startswith(names[m])), None)
                 if m:
                     out.setdefault(m, []).append((w.split()[0], part[len(names[m]) + 1:]))
@@ -466,8 +514,11 @@ def rule_answer(question, df, dec, warns):
         if drifting:
             m = max(drifting, key=lambda m: len(drifting[m]))
             steps = "; then ".join(f"{what} (since {t})" for t, what in drifting[m])
-            return (f"The {names[m].lower()} needs attention: {steps}. Vibration rising first and then the motor "
-                    "heating up is a typical sign of a wearing bearing, so check it before it fails.",
+            why = ("The glue heater is cooling down; below 150 °C its PLC program stops the labeller, so check the "
+                   "heater now." if "glue" in steps else
+                   "Vibration rising first and then the motor heating up is a typical sign of a wearing bearing, "
+                   "so check it before it fails.")
+            return (f"The {names[m].lower()} needs attention: {steps}. {why}",
                     f"signals: {names[m]} vibration, motor current, motor temperature")
         return "Nothing needs attention: no machine is drifting away from normal.", "signals: all"
 

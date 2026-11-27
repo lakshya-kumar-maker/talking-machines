@@ -111,7 +111,7 @@ def classify_group(df, tags):
 
     # heater: high and steady even when the machine stops
     for t in list(left):
-        if fp[t]["median"] > 100 and fp[t]["std"] < 0.02 * fp[t]["median"]:
+        if fp[t]["median"] > 100 and df[t].diff().abs().median() < 1.5:        # hot, and moves only slowly
             take("glue_temp", t, f"steady around {fp[t]['median']:.0f} even when stopped (a heater)")
 
     # temperature: 20-90 and changes slowly
