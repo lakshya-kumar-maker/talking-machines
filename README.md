@@ -158,7 +158,6 @@ python collector.py --test-write          # prove writes are refused
 | `openplc_export.py` | Exports all six controllers as one program for OpenPLC Runtime |
 | `plant.py` | Plays the machines against a real soft PLC (OpenPLC) over Modbus TCP |
 | `softplc.py` | Small stand-in for OpenPLC, for testing without installing it |
-| `softpic.py` | Older duplicate of `softplc.py`; not used by anything |
 | `test_llm.py` | Quick check that the Groq and Gemini API keys in `.env` work |
 | `tests/` | pytest suite (see below) |
 
