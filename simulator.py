@@ -19,8 +19,20 @@ ABBR = {"running": "RUN", "fault": "FLT", "speed": "SPD", "count": "CNT", "motor
         "motor_temp": "T_MOT", "vibration": "VIB", "fill_pressure": "P_FILL", "cap_torque": "TRQ",
         "glue_temp": "T_GLUE", "case_count": "CASE", "layer_count": "LYR"}
 
-JAM = (8 * 60, 14 * 60)            
-WEAR, FAIL = 20 * 60, 35 * 60      
+
+
+def timeline(seed):
+    """When things go wrong in this run. Different for every seed, always in this order:
+    healthy start (so the baseline can be learned) -> capper jams -> filler bearing wears -> filler fails."""
+    r = random.Random(seed * 7919 + 1)
+    jam_start = r.randint(8, 11) * 60
+    jam = (jam_start, jam_start + r.randint(5, 7) * 60)
+    n = r.randint(3, 5)                                   # always 3-5 short capper jams in that window
+    slot = (jam[1] - jam[0]) // n
+    jams = [(jam[0] + i * slot + r.randint(0, max(slot - 40, 1)), r.randint(15, 35)) for i in range(n)]
+    wear = r.randint(18, 24) * 60
+    fail = wear + r.randint(12, 17) * 60
+    return jam, jams, wear, fail
 
 
 def make_tags(rng):
@@ -48,16 +60,12 @@ def make_tags(rng):
 def simulate(minutes, seed):
     rng = random.Random(seed)
     tags = make_tags(rng)
+    JAM, JAMS, WEAR, FAIL = timeline(seed)
     st = {m: {"temp": 38.0, "count": 0.0, "cases": 0.0, "layers": 0.0, "jam_left": 0} for m in MACHINES}
     for t in range(minutes * 60):
-        cap = st["capper"]
-        if JAM[0] <= t < JAM[1] and cap["jam_left"] == 0 and rng.random() < 1 / 90:
-            cap["jam_left"] = rng.randint(15, 35)
         wear = min(1.0, max(0.0, (t - WEAR) / (FAIL - WEAR)))
         filler_failed = t >= FAIL
-        capper_jammed = cap["jam_left"] > 0
-        if capper_jammed:
-            cap["jam_left"] -= 1
+        capper_jammed = any(s0 <= t < s0 + d for s0, d in JAMS)
         line_down = filler_failed
         row = {}
         for m in MACHINES:
@@ -121,6 +129,7 @@ def main():
                 cols = list(row)
                 random.Random(a.seed).shuffle(cols)            
                 writer.writerow(["timestamp"] + cols)
+                JAM, JAMS, WEAR, FAIL = timeline(a.seed)
                 key = {v["tag"]: {k: v[k] for k in ("machine", "signal", "kind", "unit", "vendor_style")}
                        for v in tags.values()}
                 with open("data/answers.json", "w") as f:   
