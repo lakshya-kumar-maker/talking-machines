@@ -15,9 +15,9 @@ import streamlit as st
 import line
 
 PATH = "data/stream.csv"
-MIN_ROWS = 180                      
+MIN_ROWS = 180                      # the decoder needs ~3 simulated minutes before names mean anything
 RUN_MINUTES = 45
-REFRESH = 1                     
+REFRESH = 3                         # seconds between live updates
 
 st.set_page_config(page_title="Talking Machines", page_icon="🏭", layout="wide")
 st.markdown("""<style>
@@ -25,23 +25,24 @@ st.markdown("""<style>
 [data-testid="stStatusWidget"] {visibility: hidden;}
 </style>""", unsafe_allow_html=True)
 
+
+# ── the simulated line, running in the background ─────────────────────────
 LOGS = {"proc": "data/simulator.log", "collector": "data/collector.log"}
 
 
 @st.cache_resource
 def line_process():
     """The simulated PLC (and the collector reading it), kept between page refreshes."""
-    atexit.register(stop_line)                       
+    atexit.register(stop_line)                       # once per server, not once per script rerun
     return {"proc": None, "collector": None, "speed": 20, "seed": 7, "mode": "PLC (Modbus TCP)"}
 
 
 def _spawn(key, args):
     """Start a helper process; its output goes to a log file so a crash can be shown on the page."""
     log = open(LOGS[key], "w", encoding="utf-8")
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
-               TM_PARENT_PID=str(os.getpid()))           
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     line_process()[key] = subprocess.Popen([sys.executable] + args, stdout=log, stderr=subprocess.STDOUT, env=env)
-    log.close()                                      
+    log.close()                                      # the child keeps its own handle
 
 
 def start_line(speed, seed, mode):
@@ -58,7 +59,7 @@ def start_line(speed, seed, mode):
     else:
         _spawn("proc", args)
     lp["speed"], lp["seed"], lp["mode"] = speed, seed, mode
-    time.sleep(1.0)                                  
+    time.sleep(1.0)                                  # let the first rows arrive
 
 
 def stop_line():
@@ -89,7 +90,7 @@ def crashed():
     return out
 
 
-if line_process()["proc"] is None and not line_process().get("stopped"):   
+if line_process()["proc"] is None and not line_process().get("stopped"):   # first run: start from 09:00
     start_line(line_process()["speed"], line_process()["seed"], line_process()["mode"])
 
 with st.sidebar:
@@ -101,12 +102,12 @@ with st.sidebar:
     mode = st.radio("How Talking Machines reads the line", modes, index=modes.index(lp["mode"]),
                     help="PLC: the simulator acts as a PLC on Modbus TCP port 5020 and a collector reads it, "
                          "read-only, like in a real plant. File: the simulator writes the data file directly.")
-    if st.button("▶ Restart line from 09:00", width="stretch"):
+    if st.button("▶ Restart line from 09:00", use_container_width=True):
         lp["stopped"] = False
         st.session_state.pop("inject_log", None)
         start_line(speed, int(seed), mode)
         st.rerun()
-    if st.button("■ Stop line", width="stretch"):
+    if st.button("■ Stop line", use_container_width=True):
         lp["stopped"] = True
         stop_line()
     alive = lambda p: p is not None and p.poll() is None
@@ -123,7 +124,7 @@ st.title("🏭 Talking Machines")
 st.caption("Bottling line · read-only: it watches the machines and never controls them")
 
 
-
+# ── reading the data ───────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, max_entries=3)
 def snapshot(bucket):
     df, dec = line.load(PATH)
@@ -135,12 +136,16 @@ def current():
     if not os.path.exists(PATH):
         return None
     try:
+        # reload every few seconds; Windows doesn't update the file's time while the simulator writes it
         return snapshot(int(time.time() // REFRESH))
-    except Exception as e:                          
+    except Exception as e:                           # file being rewritten: try again on the next refresh
         st.info(f"Reading the line… ({e.__class__.__name__})")
         return None
 
-INJECT_MIN = 8      
+
+# ── live demo: let a judge break a machine ─────────────────────────────────
+INJECT_MIN = 8      # the system learns "normal" from minutes 3-8, so faults can be added after that
+
 with st.sidebar:
     st.divider()
     st.header("🔧 Break a machine")
@@ -158,7 +163,7 @@ with st.sidebar:
         st.caption("Start the line first (▶ Restart line).")
     elif _minute < INJECT_MIN and what in ("filler_wear", "glue_heater"):
         st.caption(f"Available from 09:{INJECT_MIN:02d}: the system is still learning what normal looks like.")
-    elif st.button("💥 Break it now", width="stretch", type="primary"):
+    elif st.button("💥 Break it now", use_container_width=True, type="primary"):
         st.session_state["inject_id"] = st.session_state.get("inject_id", 0) + 1
         import json
         with open("data/inject.json.tmp", "w", encoding="utf-8") as f:
@@ -169,6 +174,11 @@ with st.sidebar:
         st.toast("Fault injected. Watch the Live line tab: the warning comes first, then the stop.", icon="💥")
     for item in reversed(st.session_state.get("inject_log", [])[-4:]):
         st.caption("💥 " + item)
+
+
+def line_anomaly_flag():
+    import anomaly
+    return anomaly.FLAG
 
 
 def clock(df):
@@ -225,6 +235,7 @@ def live():
             else:
                 st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
 
+    # what the stoppages have cost so far
     d = line.downtime(df, dec, line.PRICE)
     if d:
         st.subheader("Cost of downtime")
@@ -240,7 +251,7 @@ def live():
                                    "Minutes": round(e["minutes"], 1), "Bottles lost": round(e["bottles"]),
                                    "Cost": line.rupees(e["rupees"]) + (" and rising" if e["ongoing"] else "")}
                                   for e in reversed(d["events"])])
-            st.dataframe(table, hide_index=True, width="stretch")
+            st.dataframe(table, hide_index=True, use_container_width=True)
         saved = [x for x in line.cost_text(d, warns).split(". ") if "could have been planned" in x]
         if saved:
             st.warning("💡 " + saved[0].strip().rstrip(".") + ".")
@@ -260,11 +271,45 @@ def live():
                 st.dataframe(pd.DataFrame([{"Signal": ch["signal"], "Normal": ch["normal"], "Now": ch["now"],
                                             "Unit": ch["unit"], "Change": f"{ch['change_pct']:+}%",
                                             "Since": f"{ch['since']:%H:%M}"} for ch in c["changed"]]),
-                             hide_index=True, width="stretch")
+                             hide_index=True, use_container_width=True)
+            if c.get("forest"):
+                f = c["forest"]
+                st.caption(f"🌲 Isolation Forest {'agrees' if c['changed'] else 'noticed it first'}: all its signals "
+                           f"together look unusual since {f['since']:%H:%M} (score up to {f['score']:.2f}), "
+                           f"mainly {f['why']}.")
             st.markdown(f"**Why:** {c['cause']}  \n**Do:** {c['action']}")
     with st.expander("All warnings, newest first"):
         for w in reversed(warns):
             st.write("⚠ " + w)
+
+    # second opinion: an Isolation Forest looks at each machine's signals together
+    scores, found = line.forest(df, dec)
+    if scores:
+        st.subheader("Second opinion: Isolation Forest")
+        st.caption("Learns what each machine's signals look like together while healthy (09:03–09:08), then scores "
+                   "every second: 0 = normal, 1 = unlike anything seen while healthy. It is not scored while a "
+                   f"machine is stopped or slowed by another one. Above {line_anomaly_flag()} for 30 s = unusual.")
+        names = line.decoder.MACHINE_NAMES
+        recent = pd.DataFrame({names[m]: s_["score"] for m, s_ in scores.items()}).assign(timestamp=df["timestamp"])
+        recent = recent.tail(15 * 60).melt("timestamp", var_name="Machine", value_name="Score").dropna()
+        base = alt.Chart(recent).mark_line().encode(
+            x=alt.X("timestamp:T", title=None), y=alt.Y("Score:Q", title=None, scale=alt.Scale(domain=[0, 1])),
+            color=alt.Color("Machine:N", legend=alt.Legend(orient="bottom", title=None)))
+        rule = alt.Chart(pd.DataFrame({"y": [line_anomaly_flag()]})).mark_rule(strokeDash=[4, 4]).encode(y="y:Q")
+        st.altair_chart((base + rule).properties(height=200), use_container_width=True)
+        if not found:
+            st.success("🌲 Nothing unusual: every machine's signals together look like normal.")
+        for f in found:
+            first_drift = next((w[:5] for w in warns if w[7:].startswith(names[f["machine"]]) and
+                                (" up " in w or "glue" in w)), None)
+            compare = ""
+            if first_drift:
+                gap = (int(first_drift[:2]) * 60 + int(first_drift[3:5])) - (f["since"].hour * 60 + f["since"].minute)
+                compare = (f" · {gap} min before the single-signal warning ({first_drift})" if gap > 0 else
+                           " · at the same time as the single-signal warning" if gap == 0 else
+                           f" · {-gap} min after the single-signal warning ({first_drift})")
+            st.warning(f"🌲 **{names[f['machine']]}** unusual since **{f['since']:%H:%M}**, mainly {f['why']} "
+                       f"(score up to {f['score']:.2f}){compare}")
 
     st.subheader("Signals")
     machines = line.by_machine(dec)
@@ -285,7 +330,7 @@ def live():
             color=alt.Color("Signal:N", sort=list(chart.columns),
                             legend=alt.Legend(orient="bottom", direction="vertical", title=None, labelLimit=0)),
         ).properties(height=280),
-        width="stretch")
+        use_container_width=True)
     if "speed" in sig:
         st.line_chart(recent[[sig["speed"]]].rename(columns={sig["speed"]: dec[sig["speed"]]["name"]}), height=160)
 
@@ -294,7 +339,7 @@ with tab_live:
     live()
 
 
-TAB_REFRESH = 10                  
+TAB_REFRESH = 10                    # the side tabs update by themselves every few seconds
 
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")
@@ -313,7 +358,7 @@ def tag_translator():
     low = int((table["Confidence"] == "low").sum())
     st.write(f"**{len(table)} signals decoded from how they behave** · {low} marked low confidence "
              f"· as of {df['timestamp'].iloc[-1]:%H:%M:%S}")
-    st.dataframe(table, width="stretch", hide_index=True, height=560)
+    st.dataframe(table, use_container_width=True, hide_index=True, height=560)
 
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")

@@ -160,6 +160,7 @@ def facts(df, dec, warns):
     lines.append("History: " + ("; ".join(ev) if ev else "no stops or slowdowns"))
     lines.append("Warnings so far: " + ("; ".join(warns) if warns else "none"))
     lines.append(cost_text(downtime(df, dec, PRICE), warns))
+    lines.append(forest_text(df, dec))
     for f, t in program_rules(dec).items():
         if t["machine"]:
             lines.append(f"PLC program {f} ({decoder.MACHINE_NAMES[t['machine']]}): "
@@ -279,6 +280,34 @@ LABEL = {"vibration": "Vibration", "motor_current": "Motor current", "motor_temp
          "glue_temp": "Glue temperature"}
 
 
+_FOREST = {}
+
+
+def forest(df, dec):
+    """Isolation Forest findings (anomaly.py), cached for the current data so every part of the page and
+    Ask the Line can use them without training again. -> (scores per machine, findings)"""
+    key = (len(df), str(df["timestamp"].iloc[-1]), tuple(sorted((t, r["signal"]) for t, r in dec.items())))
+    if key not in _FOREST:
+        try:
+            import anomaly
+            scores = anomaly.score_line(df, dec)
+            _FOREST.clear()
+            _FOREST[key] = (scores, anomaly.findings(df, scores))
+        except Exception:
+            return {}, []
+    return _FOREST[key]
+
+
+def forest_text(df, dec):
+    _, found = forest(df, dec)
+    names = decoder.MACHINE_NAMES
+    if not found:
+        return "Isolation Forest (looks at all of a machine's signals together): nothing unusual."
+    return "Isolation Forest (looks at all of a machine's signals together): " + "; ".join(
+        f"{names.get(f['machine'], f['machine'])} unusual since {f['since']:%H:%M}, mainly {f['why']}"
+        for f in found) + "."
+
+
 def alert_cards(df, dec, base=(3, 8), smooth=60):
     """One explained alert per machine: what changed, since when, how far from normal, likely cause, action.
     Severity = how serious it is; confidence = how sure we are it's real (how many signals agree, how long)."""
@@ -290,6 +319,7 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
     healthy = sm.iloc[base[0] * 60:base[1] * 60]
     mu, sd = healthy.mean(), healthy.std()
     sp, st = spans(df, dec), status(df, dec)
+    fz = {f["machine"]: f for f in forest(df, dec)[1]}
     cards = []
     for i, m in enumerate(MACHINE_ORDER):
         sig = by_machine(dec).get(m, {})
@@ -318,7 +348,7 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
                                 "normal": round(hmu, 2), "now": round(now_v, 2), "unit": dec[t]["unit"],
                                 "change_pct": round((now_v - hmu) / abs(hmu) * 100, 1), "z": 20.0})
         changed.sort(key=lambda c: c["since"])
-        if not changed and not row["fault"]:
+        if not changed and not row["fault"] and m not in fz:
             continue
         keys = [c["key"] for c in changed]
         if "glue_temp" in keys:
@@ -343,6 +373,10 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
         else:
             cause = "The machine raised its own fault signal."
             action = f"Check the {names[m].lower()} fault message on its panel."
+        if not changed and not row["fault"]:          # only the Isolation Forest has noticed so far
+            cause = (f"Several signals together no longer look like normal (Isolation Forest), mainly "
+                     f"{fz[m]['why']}. Each one is still too small for the single-signal check: an early hint.")
+            action = f"Keep an eye on the {names[m].lower()} and check it at the next planned stop."
         if row["fault"]:
             action = (f"Repair the {names[m].lower()} before restarting: "
                       + action.split(";")[0].replace(f"the {names[m].lower()} ", "its ")[0].lower()
@@ -350,6 +384,9 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
                       if changed else action)
             severity = "Critical"
             title = f"{names[m]}: FAULT, line stopped"
+        elif not changed:
+            severity = "Medium"
+            title = f"{names[m]}: unusual pattern (early hint)"
         elif len(changed) >= 2 or max(c["z"] for c in changed) > 15:
             severity = "High"
             title = f"{names[m]}: likely to fail soon"
@@ -358,9 +395,12 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
             title = f"{names[m]}: drifting from normal"
         mins = (ts.index[-1] - changed[0]["since"]).total_seconds() / 60 if changed else 0
         confidence = "high" if len(changed) >= 2 and mins >= 3 else ("medium" if mins >= 1 else "low")
+        if changed and m in fz:                       # two independent detectors agree: more sure it's real
+            confidence = {"low": "medium", "medium": "high"}.get(confidence, confidence)
         cards.append({"machine": names[m], "title": title, "severity": severity, "confidence": confidence,
                       "changed": changed, "cause": cause, "action": action,
-                      "first_seen": changed[0]["since"] if changed else None,
+                      "first_seen": changed[0]["since"] if changed else (fz[m]["since"] if m in fz else None),
+                      "forest": fz.get(m),
                       "status": "FAULT" if row["fault"] else ("Running" if row["running"] else "Stopped")})
     # knock-on effects: machines that slowed only because another machine had a fault
     return cards
@@ -371,6 +411,10 @@ def explain_card(c):
     for ch in c["changed"]:
         lines.append(f"  • {ch['signal']}: normal {ch['normal']} → now {ch['now']} {ch['unit']} "
                      f"({ch['change_pct']:+}%) since {ch['since']:%H:%M}")
+    if c.get("forest"):
+        f = c["forest"]
+        lines.append(f"  • Isolation Forest {'agrees' if c['changed'] else 'noticed it'}: unusual since {f['since']:%H:%M} (score up to {f['score']:.2f}), "
+                     f"mainly {f['why']}")
     lines.append(f"  Why: {c['cause']}")
     lines.append(f"  Do: {c['action']}")
     return "\n".join(lines)
@@ -503,7 +547,8 @@ def rule_answer(question, df, dec, warns):
             return f"Right now these are stopped: {', '.join(stopped)}, but no fault light is on.", "signals: running, fault"
         return "The whole line is running right now.", "signals: running"
 
-    if any(w in q for w in ("attention", "fail", "wrong", "problem", "risk", "worry", "check", "break")):
+    if any(w in q for w in ("attention", "fail", "wrong", "problem", "risk", "worry", "check", "break",
+                            "unusual", "anomal", "strange", "weird")):
         if faults_now:
             m = faults_now[0]
             early = drifting.get(m)
@@ -518,8 +563,19 @@ def rule_answer(question, df, dec, warns):
                    "heater now." if "glue" in steps else
                    "Vibration rising first and then the motor heating up is a typical sign of a wearing bearing, "
                    "so check it before it fails.")
+            fz = {f["machine"]: f for f in forest(df, dec)[1]}.get(m)
+            if fz:
+                why += (f" The Isolation Forest, which looks at all its signals together, agrees: unusual since "
+                        f"{fz['since']:%H:%M}.")
             return (f"The {names[m].lower()} needs attention: {steps}. {why}",
                     f"signals: {names[m]} vibration, motor current, motor temperature")
+        hints = forest(df, dec)[1]
+        if hints:
+            f = hints[0]
+            return (f"No machine has crossed a warning limit yet, but the Isolation Forest sees an early hint on the "
+                    f"{names[f['machine']].lower()}: its signals together look unusual since {f['since']:%H:%M}, "
+                    f"mainly {f['why']}. Keep an eye on it.",
+                    f"signals: all {names[f['machine']]} signals together (Isolation Forest)")
         return "Nothing needs attention: no machine is drifting away from normal.", "signals: all"
 
     if asked == "cobot":
