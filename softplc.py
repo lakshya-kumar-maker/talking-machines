@@ -9,6 +9,7 @@ writes the outputs (%QW = holding registers 0..). Modbus TCP: reads (03, 04) and
 The real thing is OpenPLC Runtime (see the setup guide); this is only for testing and as a fallback.
 --time-scale makes the timers run faster (for fast tests together with plant.py --speed).
 """
+
 import argparse
 import json
 import re
@@ -51,7 +52,7 @@ class Program:
                     return
             for x in s[2] or []:
                 self.run(x, dt)
-        elif k == "call":                                       # TON: on-delay timer
+        elif k == "call":  # TON: on-delay timer
             tm = self.timers.setdefault(s[1], {"et": 0.0, "q": False})
             pt = self._seconds(s[2]["PT"][1])
             if self.ev(s[2]["IN"]):
@@ -99,7 +100,9 @@ class SoftPLC:
             doc = json.load(f)
         self.map = {t: e for t, e in doc["map"].items() if not t.startswith("__")}
         import random
+
         import simulator
+
         tags = simulator.make_tags(random.Random(doc["seed"]), doc["seed"])
         self.prog = Program(plc_programs.PROGRAMS, {k: v["tag"] for k, v in tags.items()}, time_scale)
         self.regs = [0] * 2048
@@ -121,14 +124,14 @@ class SoftPLC:
                     with plc.lock:
                         if fc in (3, 4):
                             a, n = struct.unpack(">HH", body[1:5])
-                            pdu = struct.pack(">BB", fc, 2 * n) + struct.pack(f">{n}H", *plc.regs[a:a + n])
+                            pdu = struct.pack(">BB", fc, 2 * n) + struct.pack(f">{n}H", *plc.regs[a : a + n])
                         elif fc == 6:
                             a, v = struct.unpack(">HH", body[1:5])
                             plc.regs[a] = v
                             pdu = body[:5]
                         elif fc == 16:
                             a, n = struct.unpack(">HH", body[1:5])
-                            plc.regs[a:a + n] = list(struct.unpack(f">{n}H", body[6:6 + 2 * n]))
+                            plc.regs[a : a + n] = list(struct.unpack(f">{n}H", body[6 : 6 + 2 * n]))
                             pdu = body[:5]
                         else:
                             pdu = struct.pack(">BB", fc | 0x80, 1)
@@ -145,16 +148,21 @@ class SoftPLC:
             now = time.time()
             dt, last = now - last, now
             with self.lock:
-                for t, e in self.map.items():                       # inputs: registers -> values
+                for t, e in self.map.items():  # inputs: registers -> values
                     if e["dir"] == "in":
                         raw = struct.unpack(">h", struct.pack(">H", self.regs[e["addr"]]))[0]
-                        self.prog.vars[t] = (raw != 0) if e["type"] == "bool" else (
-                            raw if e["kind"] == "int" else raw / e["scale"])
+                        self.prog.vars[t] = (
+                            (raw != 0) if e["type"] == "bool" else (raw if e["kind"] == "int" else raw / e["scale"])
+                        )
                 self.prog.scan(dt)
-                for t, e in self.map.items():                       # outputs: values -> registers
+                for t, e in self.map.items():  # outputs: values -> registers
                     if e["dir"] == "out":
                         v = self.prog.vars.get(t, 0)
-                        r = (1 if v else 0) if e["type"] == "bool" else int(round(v * (1 if e["kind"] == "int" else e["scale"])))
+                        r = (
+                            (1 if v else 0)
+                            if e["type"] == "bool"
+                            else int(round(v * (1 if e["kind"] == "int" else e["scale"])))
+                        )
                         self.regs[e["addr"]] = max(-32768, min(32767, r)) & 0xFFFF
             time.sleep(max(0.0, cycle - (time.time() - now)))
 

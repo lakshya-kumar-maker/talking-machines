@@ -10,13 +10,14 @@ the conveyor); one only in the code is a rule that hasn't been triggered yet.
 
   python dependency.py        print the map for data/stream.csv
 """
+
 import os
 import sys
 
 import pandas as pd
 
-WINDOW = 30            # seconds after a fault starts in which a reaction counts
-SLOW = 0.7             # below this share of normal speed = slowed
+WINDOW = 30  # seconds after a fault starts in which a reaction counts
+SLOW = 0.7  # below this share of normal speed = slowed
 ORDER = ["depalletiser", "filler", "capper", "labeller", "case_packer", "cobot"]
 
 
@@ -44,20 +45,19 @@ def from_data(df, dec):
                 s = sig.get(b, {})
                 if b == a or "running" not in s or "speed" not in s:
                     continue
-                if "fault" in s and df[s["fault"]].iloc[max(i - 2, 0):i + WINDOW].max() > 0:
-                    continue                                    # b had its own fault: not a knock-on effect
-                if "zone_occupied" in s and df[s["zone_occupied"]].iloc[max(i - 5, 0):i + WINDOW].max() > 0:
-                    continue                                    # the cobot slowed for a person, not for a
+                if "fault" in s and df[s["fault"]].iloc[max(i - 2, 0) : i + WINDOW].max() > 0:
+                    continue  # b had its own fault: not a knock-on effect
+                if "zone_occupied" in s and df[s["zone_occupied"]].iloc[max(i - 5, 0) : i + WINDOW].max() > 0:
+                    continue  # the cobot slowed for a person, not for a
                 run, spd = df[s["running"]] > 0.5, df[s["speed"]].astype(float)
                 normal = spd[run].median()
                 before = slice(max(i - 5, 0), i)
                 if not run.iloc[before].all() or spd.iloc[before].median() < 0.9 * normal:
-                    continue                                    # it wasn't running normally just before
+                    continue  # it wasn't running normally just before
                 after = range(i, min(i + WINDOW, len(df)))
                 stopped = next((j for j in after if not run.iloc[j]), None)
                 slow = next((j for j in after if run.iloc[j] and spd.iloc[j] < SLOW * normal), None)
-                e = edges.setdefault((a, b), {"stops": 0, "slows": 0, "faults": len(onsets), "lag_s": [],
-                                              "times": []})
+                e = edges.setdefault((a, b), {"stops": 0, "slows": 0, "faults": len(onsets), "lag_s": [], "times": []})
                 if stopped is not None and (slow is None or stopped <= slow + 3):
                     e["stops"] += 1
                     e["lag_s"].append(stopped - i)
@@ -72,8 +72,9 @@ def from_data(df, dec):
 # ── 2. from the PLC code ──────────────────────────────────────────────────
 def from_code(dec, folder="data/plc_programs"):
     """{(source, target): {"effect": "stops"|"slows", "when": "filler fault", "file": "PLC3_OB1.st",
-                           "speed": 120.0}}"""
+    "speed": 120.0}}"""
     import translator
+
     edges = {}
     if not os.path.isdir(folder):
         return edges
@@ -86,8 +87,10 @@ def from_code(dec, folder="data/plc_programs"):
         me = translator.which_machine([(None, r) for r in rules], dec)
         if not me:
             continue
-        normal_speed = max([s[2][1] for r in rules for s in _sets(r)
-                            if s[1] == sig.get(me, {}).get("speed") and s[2][0] == "num"] or [0])
+        normal_speed = max(
+            [s[2][1] for r in rules for s in _sets(r) if s[1] == sig.get(me, {}).get("speed") and s[2][0] == "num"]
+            or [0]
+        )
 
         for r in rules:
             if r[0] != "if":
@@ -164,8 +167,11 @@ def describe(e, names):
         d = e["data"]
         n = d["stops"] + d["slows"]
         lag = sorted(d["lag_s"])[len(d["lag_s"]) // 2]
-        parts.append(f"seen {n} of {d['faults']} times the {a.lower()} faulted ("
-                     + ("immediately" if lag <= 1 else f"within {lag} s") + ")")
+        parts.append(
+            f"seen {n} of {d['faults']} times the {a.lower()} faulted ("
+            + ("immediately" if lag <= 1 else f"within {lag} s")
+            + ")"
+        )
     if e["code"]:
         c = e["code"]
         how = f"slows it to {c['speed']:g}" if c["effect"] == "slows" and c["speed"] else c["effect"] + " it"
@@ -176,14 +182,16 @@ def describe(e, names):
 def graph_dot(edges, names):
     """Graphviz text for the map (Streamlit draws it with st.graphviz_chart)."""
     color = {"confirmed": "#2e9e5b", "seen in data": "#e08a00", "in code, not seen yet": "#3b82f6"}
-    present = sorted({e["source"] for e in edges} | {e["target"] for e in edges} | set(ORDER[:5]),
-                     key=ORDER.index)
-    lines = ['digraph G {', 'rankdir=LR; bgcolor="transparent";',
-             'node [shape=box, style="rounded,filled", fillcolor="#f4f4f5", fontname="Helvetica", fontsize=12];',
-             'edge [fontname="Helvetica", fontsize=10];']
+    present = sorted({e["source"] for e in edges} | {e["target"] for e in edges} | set(ORDER[:5]), key=ORDER.index)
+    lines = [
+        "digraph G {",
+        'rankdir=LR; bgcolor="transparent";',
+        'node [shape=box, style="rounded,filled", fillcolor="#f4f4f5", fontname="Helvetica", fontsize=12];',
+        'edge [fontname="Helvetica", fontsize=10];',
+    ]
     for m in present:
         lines.append(f'"{m}" [label="{names.get(m, m)}"];')
-    for a, b in zip(ORDER, ORDER[1:]):                          # the conveyor itself, for orientation
+    for a, b in zip(ORDER, ORDER[1:]):  # the conveyor itself, for orientation
         if a in present and b in present:
             lines.append(f'"{a}" -> "{b}" [style=dotted, color="#a1a1aa", arrowhead=none, weight=10];')
     for e in edges:
@@ -191,9 +199,11 @@ def graph_dot(edges, names):
         n = (d["stops"] + d["slows"]) if d else 0
         label = e["effect"] + (f" ({n}×)" if n else "")
         width = 1 + min(n, 5) * 0.6
-        lines.append(f'"{e["source"]}" -> "{e["target"]}" [label="{label}", color="{color[e["status"]]}", '
-                     f'fontcolor="{color[e["status"]]}", penwidth={width:.1f}, '
-                     f'style={"dashed" if e["status"] == "in code, not seen yet" else "solid"}, constraint=false];')
+        lines.append(
+            f'"{e["source"]}" -> "{e["target"]}" [label="{label}", color="{color[e["status"]]}", '
+            f'fontcolor="{color[e["status"]]}", penwidth={width:.1f}, '
+            f"style={'dashed' if e['status'] == 'in code, not seen yet' else 'solid'}, constraint=false];"
+        )
     lines.append("}")
     return "\n".join(lines)
 
@@ -201,6 +211,7 @@ def graph_dot(edges, names):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     import decoder
+
     df = pd.read_csv("data/stream.csv", parse_dates=["timestamp"])
     dec, _ = decoder.decode(df)
     for e in build(df, dec):

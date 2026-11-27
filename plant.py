@@ -17,6 +17,7 @@ Talking Machines reads the PLC with collector.py, read-only, exactly as before.
 vibration timer 10 s), so keep it low (default 5): at 5x a 15 s jam lasts 3 real seconds, long enough for
 the 2 s jam timer to see it.
 """
+
 import argparse
 import json
 import math
@@ -64,7 +65,7 @@ class FieldIO:
         while n > 0:
             k = min(n, 125)
             r = self._ask(struct.pack(">BHH", 3, addr, k))
-            out += list(struct.unpack(f">{k}H", r[2:2 + 2 * k]))
+            out += list(struct.unpack(f">{k}H", r[2 : 2 + 2 * k]))
             addr, n = addr + k, n - k
         return out
 
@@ -96,8 +97,8 @@ def run(host, port, speed, minutes, map_path, calm=False):
     seed, regmap = doc["seed"], doc["map"]
     tags = S.make_tags(random.Random(seed), seed)
     S.CALM = calm
-    S.write_answers(tags, seed, START)                    # answer key + data/plc_programs for the translator
-    tag = {k: v["tag"] for k, v in tags.items()}          # (machine, signal) -> tag name
+    S.write_answers(tags, seed, START)  # answer key + data/plc_programs for the translator
+    tag = {k: v["tag"] for k, v in tags.items()}  # (machine, signal) -> tag name
     outs = {t: e for t, e in regmap.items() if e.get("dir") == "out"}
     ins = {t: e for t, e in regmap.items() if e.get("dir") == "in"}
     out_lo = min(e["addr"] for e in outs.values())
@@ -120,8 +121,9 @@ def run(host, port, speed, minutes, map_path, calm=False):
         try:
             io = FieldIO(host, port)
         except OSError:
-            print(f"waiting for the PLC at {host}:{port}… (is OpenPLC running and its Modbus server enabled?)",
-                  flush=True)
+            print(
+                f"waiting for the PLC at {host}:{port}… (is OpenPLC running and its Modbus server enabled?)", flush=True
+            )
             time.sleep(2)
     print(f"connected to the PLC at {host}:{port} · seed {seed} · {speed}x speed", flush=True)
     try:
@@ -144,7 +146,7 @@ def run(host, port, speed, minutes, map_path, calm=False):
             plc = {t_: from_reg(raw[e["addr"] - out_lo], e) for t_, e in outs.items()}
             get = lambda m, s, d=0: plc.get(tag[(m, s)], d)
             for m, what in (("filler", "filler_fails"), ("labeller", "labeller_fails")):
-                if get(m, "fault") and what not in recorded and t >= 30:   # the moment the PLC really tripped it
+                if get(m, "fault") and what not in recorded and t >= 30:  # the moment the PLC really tripped it
                     recorded.add(what)
                     _note(what, t)
             # 2. what the machines and sensors do
@@ -162,22 +164,31 @@ def run(host, port, speed, minutes, map_path, calm=False):
                 current = (2.0 + 9.0 * load + extra_i + rng.gauss(0, 0.15)) if running else rng.gauss(0.3, 0.05)
                 target = 35 + 25 * load + (28 * wear if m == "filler" else 0) + 7 * S._dist(DIST, "warm", m, t)
                 s["temp"] += (target - s["temp"]) / 240 + rng.gauss(0, 0.05)
-                vib = (1.4 + 0.6 * load + (5.4 * wear ** 1.5 if m == "filler" else 0) + abs(rng.gauss(0, 0.2))
-                       + 2.0 * S._dist(DIST, "bump", m, t)) if running else abs(rng.gauss(0.1, 0.05))
+                vib = (
+                    (
+                        1.4
+                        + 0.6 * load
+                        + (5.4 * wear**1.5 if m == "filler" else 0)
+                        + abs(rng.gauss(0, 0.2))
+                        + 2.0 * S._dist(DIST, "bump", m, t)
+                    )
+                    if running
+                    else abs(rng.gauss(0.1, 0.05))
+                )
                 s["count"] += 0 if warm else spd / 60
                 field[tag[(m, "count")]] = int(s["count"])
                 field[tag[(m, "motor_current")]] = max(current, 0)
                 field[tag[(m, "motor_temp")]] = s["temp"]
                 field[tag[(m, "vibration")]] = vib
-                if m == "capper":       # a jam: the cap no longer grips, the torque drops; the PLC's timer sees it
+                if m == "capper":  # a jam: the cap no longer grips, the torque drops; the PLC's timer sees it
                     field[tag[(m, "cap_torque")]] = (0.3 if jam_now else 1.2 + rng.gauss(0, 0.04)) if running else 0.0
                 if m == "labeller":
                     field[tag[(m, "glue_temp")]] = glue + rng.gauss(0, 0.6)
                 if m in ("depalletiser", "case_packer"):
-                    field[tag[(m, "fault")]] = False                # their programs never raise a fault
+                    field[tag[(m, "fault")]] = False  # their programs never raise a fault
                 if m == "case_packer" and running:
                     case_rate = spd / 60 / 24
-            field["JAM_CLEARED"] = bool(get("capper", "fault")) and not jam_now   # the operator clears the jam
+            field["JAM_CLEARED"] = bool(get("capper", "fault")) and not jam_now  # the operator clears the jam
             # the cobot palletises the cases, at the speed setting the PLC gives it
             zone = any(s0 <= t < s0 + d for s0, d in ZONES)
             override = float(get("cobot", "speed_override", 100.0)) or 100.0
@@ -191,13 +202,21 @@ def run(host, port, speed, minutes, map_path, calm=False):
             gripper = working and 0.2 <= cb["phase"] < 0.7
             motion = math.sin(2 * math.pi * cb["phase"])
             tcp = (1000 * override / 100 * (0.75 + 0.25 * abs(motion)) + rng.gauss(0, 12)) if working else 0.0
-            field.update({tag[("cobot", "running")]: working, tag[("cobot", "fault")]: False,
-                          tag[("cobot", "gripper_closed")]: gripper, tag[("cobot", "zone_occupied")]: zone,
-                          tag[("cobot", "cycle_count")]: int(cb["done"]), tag[("cobot", "tcp_speed")]: max(tcp, 0)})
+            field.update(
+                {
+                    tag[("cobot", "running")]: working,
+                    tag[("cobot", "fault")]: False,
+                    tag[("cobot", "gripper_closed")]: gripper,
+                    tag[("cobot", "zone_occupied")]: zone,
+                    tag[("cobot", "cycle_count")]: int(cb["done"]),
+                    tag[("cobot", "tcp_speed")]: max(tcp, 0),
+                }
+            )
             for j in range(1, 7):
                 dyn = (0.25 * S.GRAVITY[j] * motion * override / 100) if working else 0.0
-                field[tag[("cobot", f"j{j}_torque")]] = (S.GRAVITY[j] + (S.PAYLOAD[j] if gripper else 0) + dyn
-                                                        + rng.gauss(0, 0.03 * S.GRAVITY[j] + 0.1))
+                field[tag[("cobot", f"j{j}_torque")]] = (
+                    S.GRAVITY[j] + (S.PAYLOAD[j] if gripper else 0) + dyn + rng.gauss(0, 0.03 * S.GRAVITY[j] + 0.1)
+                )
             # 3. write the sensor values into the PLC's input registers, with the clock
             regs = [0] * in_n
             regs[0], regs[1] = (t >> 16) & 0xFFFF, t & 0xFFFF
@@ -205,17 +224,24 @@ def run(host, port, speed, minutes, map_path, calm=False):
                 if t_ in field:
                     regs[e["addr"] - in_lo] = to_reg(field[t_], e)
             io.write(in_lo, regs)
-            if i == 0:                                     # check the PLC really keeps what we write there
+            if i == 0:  # check the PLC really keeps what we write there
                 back = io.read(in_lo, in_n)
-                bad = [e["ident"] for t_, e in ins.items() if t_ in field and back[e["addr"] - in_lo] != regs[e["addr"] - in_lo]]
+                bad = [
+                    e["ident"]
+                    for t_, e in ins.items()
+                    if t_ in field and back[e["addr"] - in_lo] != regs[e["addr"] - in_lo]
+                ]
                 if bad:
                     raise SystemExit(
                         f"The PLC did not keep the sensor values written at Modbus registers {in_lo}.. "
                         f"({len(bad)} of {len(ins)} differ, e.g. {', '.join(bad[:3])}). Usually this means the "
                         "uploaded program is not running (press Start PLC) or this OpenPLC maps %MW0 to another "
-                        "address: re-export with  python openplc_export.py --seed N --mw-base ADDRESS  and upload again.")
-                print(f"check OK: the PLC keeps the sensor values written at registers {in_lo}..{in_lo + in_n - 1}",
-                      flush=True)
+                        "address: re-export with  python openplc_export.py --seed N --mw-base ADDRESS  and upload again."
+                    )
+                print(
+                    f"check OK: the PLC keeps the sensor values written at registers {in_lo}..{in_lo + in_n - 1}",
+                    flush=True,
+                )
             if t % 60 == 0 and not (warm and i):
                 print(f"sim minute {t // 60}", flush=True)
             time.sleep(0.1 if warm else max(0.0, 1 / speed - (time.time() - t0)))

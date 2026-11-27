@@ -8,19 +8,23 @@ rule in plain English, using the names the decoder worked out from the live data
 
 No AI is needed: the code is parsed exactly. An AI summary is optional (see summarise()).
 """
+
 import json
 import os
 import re
 import sys
 
 # ── 1. tokens ──────────────────────────────────────────────────────────────
-TOKEN = re.compile(r"""
+TOKEN = re.compile(
+    r"""
     (?P<ws>\s+) | (?P<comment>\(\*.*?\*\)) |
     (?P<time>T\#\d+(?:MS|S|M|H)) |
     (?P<num>\d+\.\d+|\d+) |
     (?P<op>:=|<=|>=|<>|[<>=+\-*/();,]) |
     (?P<id>[A-Za-z_][A-Za-z0-9_.]*(?::\d+(?:/\d+)?)?)
-""", re.X | re.S | re.I)
+""",
+    re.X | re.S | re.I,
+)
 KEYWORDS = {"IF", "THEN", "ELSIF", "ELSE", "END_IF", "AND", "OR", "NOT", "TRUE", "FALSE", "MOD"}
 
 
@@ -29,7 +33,7 @@ def tokenize(src):
     while pos < len(src):
         m = TOKEN.match(src, pos)
         if not m:
-            raise SyntaxError(f"can't read the code near: {src[pos:pos + 20]!r}")
+            raise SyntaxError(f"can't read the code near: {src[pos : pos + 20]!r}")
         pos = m.end()
         kind = m.lastgroup
         if kind in ("ws", "comment"):
@@ -83,7 +87,7 @@ class Parser:
             self.take("END_IF")
             self.take(";")
             return ("if", branches, other)
-        if kind == "id" and self.peek(1)[1] == "(":            # a function block call, e.g. a TON timer
+        if kind == "id" and self.peek(1)[1] == "(":  # a function block call, e.g. a TON timer
             name = self.take()[1]
             self.take("(")
             args = {}
@@ -187,8 +191,8 @@ def fmt(x):
 
 class English:
     def __init__(self, names):
-        self.names = names            # {tag: {"machine", "signal", "name", "unit"}} from the decoder
-        self.timers = {}              # timer name -> (condition text, duration text)
+        self.names = names  # {tag: {"machine", "signal", "name", "unit"}} from the decoder
+        self.timers = {}  # timer name -> (condition text, duration text)
         self.unknown = set()
 
     def who(self, tag):
@@ -232,14 +236,14 @@ class English:
         if k == "not":
             return self.cond(node[1], not negate)
         if k in ("and", "or"):
-            if negate:     # not (a and b) = not a or not b
+            if negate:  # not (a and b) = not a or not b
                 k = "or" if k == "and" else "and"
             return f"{self.cond(node[1], negate)} {k} {self.cond(node[2], negate)}"
         if k == "tag":
             tag = node[1]
             if tag.endswith(".Q") and tag[:-2] in self.timers:
                 cond, dur = self.timers[tag[:-2]]
-                return (f"{cond} for {dur}" if not negate else f"it is not true that {cond} for {dur}")
+                return f"{cond} for {dur}" if not negate else f"it is not true that {cond} for {dur}"
             r = self.names.get(tag)
             if r and r["signal"] in STATE:
                 on, off = STATE[r["signal"]]
@@ -249,12 +253,18 @@ class English:
             return f"{self.thing(tag)} is {'off' if negate else 'on'}"
         if k == "cmp":
             op, left, right = node[1], node[2], node[3]
-            if right[0] == "bool":                       # X = FALSE  ->  "X is off"
+            if right[0] == "bool":  # X = FALSE  ->  "X is off"
                 want = right[1] if op == "=" else not right[1]
                 return self.cond(left, negate=(not want) ^ negate)
             u = self.unit(left)
-            words = {">": "is above", "<": "is below", ">=": "is at least", "<=": "is at most",
-                     "=": "equals", "<>": "is not"}
+            words = {
+                ">": "is above",
+                "<": "is below",
+                ">=": "is at least",
+                "<=": "is at most",
+                "=": "equals",
+                "<>": "is not",
+            }
             if negate:
                 op = {">": "<=", "<": ">=", ">=": "<", "<=": ">", "=": "<>", "<>": "="}[op]
             return f"{self.value(left)} {words[op]} {self.value(right, u)}"
@@ -264,9 +274,9 @@ class English:
         k = s[0]
         if k == "call":
             name, args = s[1], s[2]
-            if "IN" in args and "PT" in args:            # an on-delay timer
+            if "IN" in args and "PT" in args:  # an on-delay timer
                 cond, dur = self.cond(args["IN"]), duration(args["PT"][1])
-                if " and " in cond or " or " in cond:             # make clear the timer covers the whole condition
+                if " and " in cond or " or " in cond:  # make clear the timer covers the whole condition
                     cond = f"({cond}) holds"
                 self.timers[name] = (cond, dur)
                 return [f"Start a timer: it trips once {cond} for {dur}."]
@@ -316,15 +326,18 @@ def split_rules(src):
     p = Parser(tokens)
     rules = []
     lines = src.splitlines()
-    starts = [i for i, l in enumerate(lines) if l.strip() and not l.startswith((" ", "\t"))
-              and not l.strip().upper().startswith(("ELSIF", "ELSE", "END_IF"))]
+    starts = [
+        i
+        for i, l in enumerate(lines)
+        if l.strip() and not l.startswith((" ", "\t")) and not l.strip().upper().startswith(("ELSIF", "ELSE", "END_IF"))
+    ]
     while p.peek()[0] != "eof":
         rules.append(p.statement())
     blocks = []
     for n, i in enumerate(starts):
         end = starts[n + 1] if n + 1 < len(starts) else len(lines)
         blocks.append("\n".join(lines[i:end]).rstrip())
-    if len(blocks) != len(rules):                       # unusual layout: fall back to one block
+    if len(blocks) != len(rules):  # unusual layout: fall back to one block
         blocks = [src.strip()] + [""] * (len(rules) - 1)
     return list(zip(blocks, rules))
 
@@ -332,6 +345,7 @@ def split_rules(src):
 def which_machine(rules, names):
     """The machine whose signals this program writes to most."""
     count = {}
+
     def walk(s):
         if s[0] == "set" and s[1] in names:
             count[names[s[1]]["machine"]] = count.get(names[s[1]]["machine"], 0) + 1
@@ -341,6 +355,7 @@ def which_machine(rules, names):
                     walk(x)
             for x in s[2] or []:
                 walk(x)
+
     for _, r in rules:
         walk(r)
     return max(count, key=count.get) if count else None
@@ -384,11 +399,19 @@ def summarise(translation):
     try:
         from dotenv import load_dotenv
         from groq import Groq
+
         load_dotenv()
         r = Groq(api_key=os.environ["GROQ_API_KEY"]).chat.completions.create(
-            model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"), timeout=20,
-            messages=[{"role": "user", "content": "Summarise what this machine's control program does for a "
-                       "maintenance engineer in 2 short sentences. Use only these rules, add nothing:\n" + text}])
+            model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+            timeout=20,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Summarise what this machine's control program does for a "
+                    "maintenance engineer in 2 short sentences. Use only these rules, add nothing:\n" + text,
+                }
+            ],
+        )
         return r.choices[0].message.content.strip()
     except Exception:
         return None
@@ -445,11 +468,17 @@ def trip_limits(names, folder="data/plc_programs"):
             if r[0] != "if":
                 continue
             for cond, body in r[1]:
-                raises = any(s[0] == "set" and names.get(s[1], {}).get("signal") == "fault"
-                             and names[s[1]]["machine"] == machine and s[2] == ("bool", True) for s in body)
+                raises = any(
+                    s[0] == "set"
+                    and names.get(s[1], {}).get("signal") == "fault"
+                    and names[s[1]]["machine"] == machine
+                    and s[2] == ("bool", True)
+                    for s in body
+                )
                 if raises:
                     for tag, op, value, hold in comparisons(cond, 0):
                         if tag in names and names[tag]["machine"] == machine:
                             out.setdefault(machine, []).append(
-                                {"tag": tag, "op": op, "value": value, "hold_s": hold, "file": f})
+                                {"tag": tag, "op": op, "value": value, "hold_s": hold, "file": f}
+                            )
     return out

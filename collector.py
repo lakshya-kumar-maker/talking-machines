@@ -5,6 +5,7 @@
 
 This is the same job a plant's data collector ("historian") does. It only ever sends READ requests.
 """
+
 import argparse
 import csv
 import os
@@ -45,11 +46,11 @@ def run(host, port, rate, out="data/stream.csv", map_path="data/plc_map.json"):
             except (OSError, ConnectionError, IOError):
                 client.close()
                 client = connect(host, port)
-                regmap = plc.load_map(map_path)               # a restarted PLC may have a new tag list
+                regmap = plc.load_map(map_path)  # a restarted PLC may have a new tag list
                 tags = _tags(regmap)
                 continue
             clock, values = plc.decode(regs, regmap)
-            if last_clock is not None and clock < last_clock:  
+            if last_clock is not None and clock < last_clock:
                 last_clock = None
             if last_clock is None:
                 if f:
@@ -60,7 +61,7 @@ def run(host, port, rate, out="data/stream.csv", map_path="data/plc_map.json"):
                 last_clock, last_row = clock - 1, None
             if clock > last_clock:
                 row = [values[t] for t in tags]
-                for missing in range(last_clock + 1, clock):    # fill any second we were too slow to see
+                for missing in range(last_clock + 1, clock):  # fill any second we were too slow to see
                     writer.writerow([str(START + timedelta(seconds=missing))] + (last_row or row))
                 writer.writerow([str(START + timedelta(seconds=clock))] + row)
                 f.flush()

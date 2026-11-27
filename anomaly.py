@@ -16,22 +16,28 @@ its neighbour is not behaving abnormally.
 
   python anomaly.py          score data/stream.csv (decodes the tag names itself)
 """
-import json
+
 import sys
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 
-BASE = (3, 8)          # healthy minutes used to learn normal (the same as the drift check)
-SMOOTH = 5             # seconds of smoothing on the inputs
-SCORE_SMOOTH = 30      # seconds the score is averaged over
-MARGIN, RANGE = 0.03, 0.12   # raw forest score above (training max + MARGIN) starts counting; + RANGE = score 1
-FLAG = 0.35            # score above this ... (healthy machines never stayed above 0.01 in 12 test runs)
-HOLD = 30              # ... for this many seconds = an anomaly
-LABELS = {"vibration": "vibration", "vib_spread": "vibration shakiness", "motor_current": "motor current",
-          "amps_per_bottle": "current per bottle", "fill_pressure": "fill pressure",
-          "cap_torque": "capping torque", "glue_temp": "glue temperature"}
+BASE = (3, 8)  # healthy minutes used to learn normal (the same as the drift check)
+SMOOTH = 5  # seconds of smoothing on the inputs
+SCORE_SMOOTH = 30  # seconds the score is averaged over
+MARGIN, RANGE = 0.03, 0.12  # raw forest score above (training max + MARGIN) starts counting; + RANGE = score 1
+FLAG = 0.35  # score above this ... (healthy machines never stayed above 0.01 in 12 test runs)
+HOLD = 30  # ... for this many seconds = an anomaly
+LABELS = {
+    "vibration": "vibration",
+    "vib_spread": "vibration shakiness",
+    "motor_current": "motor current",
+    "amps_per_bottle": "current per bottle",
+    "fill_pressure": "fill pressure",
+    "cap_torque": "capping torque",
+    "glue_temp": "glue temperature",
+}
 PROCESS = ("fill_pressure", "cap_torque", "glue_temp")
 _MODELS = {}
 
@@ -70,8 +76,8 @@ def score_machine(df, sig):
     if len(train) < 60:
         return None
     mu, sd = train.mean(), train.std().replace(0, np.nan)
-    sd = sd.fillna(1e-6).clip(lower=0.005 * mu.abs().clip(lower=0.05))     # small floor so a value that never
-                                                                            # moves can't look "infinitely" off
+    sd = sd.fillna(1e-6).clip(lower=0.005 * mu.abs().clip(lower=0.05))  # small floor so a value that never
+    # moves can't look "infinitely" off
     z = (feats - mu) / sd
     # the healthy minutes never change once recorded, so train once per run and reuse the model
     key = (tuple(sorted(sig.items())), str(df.index[0]), len(train), round(float(train.values.sum()), 6))
@@ -80,7 +86,7 @@ def score_machine(df, sig):
     model = _MODELS[key]
     raw = pd.Series(np.nan, index=df.index)
     ok = steady & z.notna().all(axis=1)
-    raw[ok] = -model.score_samples(z[ok])                          # the forest's anomaly score, ~0.45 = normal
+    raw[ok] = -model.score_samples(z[ok])  # the forest's anomaly score, ~0.45 = normal
     raw = raw.rolling(SCORE_SMOOTH, min_periods=SCORE_SMOOTH).mean()
     # 0..1: 0 = as normal as the healthy minutes, 1 = far outside anything seen while healthy
     edge = float(raw.iloc[lo:hi].max()) + MARGIN
@@ -89,8 +95,9 @@ def score_machine(df, sig):
     # which feature is most out of line (explains the score in plain words)
     zs = z.rolling(SCORE_SMOOTH, min_periods=1).mean()
     top = zs.abs().idxmax(axis=1).where(score > FLAG)
-    direction = pd.Series([("up" if zs.at[i, c] > 0 else "down") if isinstance(c, str) else None
-                           for i, c in top.items()], index=df.index)
+    direction = pd.Series(
+        [("up" if zs.at[i, c] > 0 else "down") if isinstance(c, str) else None for i, c in top.items()], index=df.index
+    )
     return pd.DataFrame({"score": score, "flagged": flagged, "top": top, "dir": direction})
 
 
@@ -129,21 +136,30 @@ def findings(df, scores, recent=120):
         reasons = window["top"].dropna()
         main = reasons.value_counts().index[0] if len(reasons) else None
         d = window.loc[window["top"] == main, "dir"].mode()
-        out.append({"machine": m, "since": df["timestamp"][first], "score": float(window["score"].max()),
-                    "now": float(s["score"].dropna().iloc[-1]) if s["score"].notna().any() else None,
-                    "why": f"{LABELS.get(main, main)} {d.iloc[0] if len(d) else ''}".strip() if main else "",
-                    "active": active})
+        out.append(
+            {
+                "machine": m,
+                "since": df["timestamp"][first],
+                "score": float(window["score"].max()),
+                "now": float(s["score"].dropna().iloc[-1]) if s["score"].notna().any() else None,
+                "why": f"{LABELS.get(main, main)} {d.iloc[0] if len(d) else ''}".strip() if main else "",
+                "active": active,
+            }
+        )
     return sorted(out, key=lambda f: f["since"])
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     import decoder
+
     df = pd.read_csv("data/stream.csv", parse_dates=["timestamp"])
-    dec, _ = decoder.decode(df)                       # names from this run's data (no stale decoded.json)
+    dec, _ = decoder.decode(df)  # names from this run's data (no stale decoded.json)
     found = findings(df, score_line(df, dec))
     if not found:
         print("Isolation Forest: nothing unusual.")
     for f in found:
-        print(f"⚠ {f['since']:%H:%M}  {decoder.MACHINE_NAMES.get(f['machine'], f['machine'])}: unusual "
-              f"(score up to {f['score']:.2f}), mainly {f['why']}")
+        print(
+            f"⚠ {f['since']:%H:%M}  {decoder.MACHINE_NAMES.get(f['machine'], f['machine'])}: unusual "
+            f"(score up to {f['score']:.2f}), mainly {f['why']}"
+        )

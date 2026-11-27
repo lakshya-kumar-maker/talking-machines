@@ -5,6 +5,7 @@ PLC software. {machine.signal} placeholders are filled in with the tag names of 
 The logic matches what the simulator does, so the translator's explanations are true for this line.
 The comments below are for us; they are stripped from the files the translator reads.
 """
+
 import os
 import re
 

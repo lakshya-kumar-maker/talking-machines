@@ -7,6 +7,7 @@
 
 The answer key (what every tag really is, and when things go wrong) goes to data/answers.json.
 """
+
 import argparse
 import csv
 import json
@@ -18,23 +19,48 @@ from datetime import datetime, timedelta
 
 MACHINES = ["depalletiser", "filler", "capper", "labeller", "case_packer"]
 COMMON = [
-    ("running", "bool", ""), ("fault", "bool", ""), ("speed", "real", "bottles/min"),
-    ("count", "int", "bottles"), ("motor_current", "real", "A"), ("motor_temp", "real", "°C"),
+    ("running", "bool", ""),
+    ("fault", "bool", ""),
+    ("speed", "real", "bottles/min"),
+    ("count", "int", "bottles"),
+    ("motor_current", "real", "A"),
+    ("motor_temp", "real", "°C"),
     ("vibration", "real", "mm/s"),
 ]
-EXTRA = {"filler": [("fill_pressure", "real", "bar")], "capper": [("cap_torque", "real", "Nm")],
-         "labeller": [("glue_temp", "real", "°C")], "case_packer": [("case_count", "int", "cases")],
-         "depalletiser": [("layer_count", "int", "layers")]}
-ABBR = {"running": "RUN", "fault": "FLT", "speed": "SPD", "count": "CNT", "motor_current": "I_AMP",
-        "motor_temp": "T_MOT", "vibration": "VIB", "fill_pressure": "P_FILL", "cap_torque": "TRQ",
-        "glue_temp": "T_GLUE", "case_count": "CASE", "layer_count": "LYR"}
+EXTRA = {
+    "filler": [("fill_pressure", "real", "bar")],
+    "capper": [("cap_torque", "real", "Nm")],
+    "labeller": [("glue_temp", "real", "°C")],
+    "case_packer": [("case_count", "int", "cases")],
+    "depalletiser": [("layer_count", "int", "layers")],
+}
+ABBR = {
+    "running": "RUN",
+    "fault": "FLT",
+    "speed": "SPD",
+    "count": "CNT",
+    "motor_current": "I_AMP",
+    "motor_temp": "T_MOT",
+    "vibration": "VIB",
+    "fill_pressure": "P_FILL",
+    "cap_torque": "TRQ",
+    "glue_temp": "T_GLUE",
+    "case_count": "CASE",
+    "layer_count": "LYR",
+}
 
 # the palletising cobot at the end of the line
-COBOT = [("running", "bool", ""), ("fault", "bool", ""), ("gripper_closed", "bool", ""),
-         ("zone_occupied", "bool", ""), ("cycle_count", "int", "cases"), ("tcp_speed", "real", "mm/s"),
-         ("speed_override", "real", "%")] + [(f"j{i}_torque", "real", "Nm") for i in range(1, 7)]
-GRAVITY = {1: 12, 2: 88, 3: 46, 4: 9, 5: 6, 6: 3}          # holding torque per joint (shoulder carries most)
-PAYLOAD = {1: 3, 2: 18, 3: 10, 4: 2, 5: 1.5, 6: 1}          # extra torque while carrying a case
+COBOT = [
+    ("running", "bool", ""),
+    ("fault", "bool", ""),
+    ("gripper_closed", "bool", ""),
+    ("zone_occupied", "bool", ""),
+    ("cycle_count", "int", "cases"),
+    ("tcp_speed", "real", "mm/s"),
+    ("speed_override", "real", "%"),
+] + [(f"j{i}_torque", "real", "Nm") for i in range(1, 7)]
+GRAVITY = {1: 12, 2: 88, 3: 46, 4: 9, 5: 6, 6: 3}  # holding torque per joint (shoulder carries most)
+PAYLOAD = {1: 3, 2: 18, 3: 10, 4: 2, 5: 1.5, 6: 1}  # extra torque while carrying a case
 
 
 def timeline(seed):
@@ -44,12 +70,12 @@ def timeline(seed):
     r = random.Random(seed * 7919 + 1)
     jam_start = r.randint(8, 11) * 60
     jam = (jam_start, jam_start + r.randint(5, 7) * 60)
-    n = r.randint(3, 5)                                   # always 3-5 short capper jams in that window
+    n = r.randint(3, 5)  # always 3-5 short capper jams in that window
     slot = (jam[1] - jam[0]) // n
     jams = [(jam[0] + i * slot + r.randint(0, max(slot - 40, 1)), r.randint(15, 35)) for i in range(n)]
     wear = r.randint(18, 24) * 60
     fail = wear + r.randint(12, 17) * 60
-    k = r.randint(2, 3)                                   # safety-zone visits, between minute 9 and 30
+    k = r.randint(2, 3)  # safety-zone visits, between minute 9 and 30
     zslot = (30 - 9) * 60 // k
     zones = [(9 * 60 + i * zslot + r.randint(0, zslot - 100), r.randint(40, 90)) for i in range(k)]
     return jam, jams, wear, fail, zones
@@ -65,7 +91,9 @@ def disturbances(seed):
     out = []
     if r.random() < 0.6:
         s0 = r.randint(10, 33) * 60
-        out.append({"kind": "heavy_batch", "machine": r.choice(MACHINES), "start": s0, "end": s0 + r.randint(4, 7) * 60})
+        out.append(
+            {"kind": "heavy_batch", "machine": r.choice(MACHINES), "start": s0, "end": s0 + r.randint(4, 7) * 60}
+        )
     if r.random() < 0.6:
         s0 = r.randint(10, 38) * 60 + r.randint(0, 59)
         out.append({"kind": "bump", "machine": r.choice(MACHINES), "start": s0, "end": s0 + r.randint(40, 100)})
@@ -80,7 +108,7 @@ def _dist(dist, kind, m, t):
     for d in dist:
         if d["kind"] == kind and d["machine"] in (m, "all") and d["start"] <= t < d["end"] + 30:
             if kind == "warm":
-                return min(1.0, (t - d["start"]) / 480)          # warms up over 8 minutes and stays
+                return min(1.0, (t - d["start"]) / 480)  # warms up over 8 minutes and stays
             return min(1.0, (t - d["start"]) / 30, max(0.0, (d["end"] + 30 - t) / 30))
     return 0.0
 
@@ -94,15 +122,31 @@ def make_tags(rng, seed):
         db = 100 + mi
         for si, (sig, kind, unit) in enumerate(COMMON + EXTRA[m]):
             if style == "siemens":
-                name = (f"DB{db}.DBX{si // 8}.{si % 8}" if kind == "bool" else
-                        f"DB{db}.DBW{si * 2}" if kind == "int" else f"DB{db}.DBD{si * 4}")
+                name = (
+                    f"DB{db}.DBX{si // 8}.{si % 8}"
+                    if kind == "bool"
+                    else f"DB{db}.DBW{si * 2}"
+                    if kind == "int"
+                    else f"DB{db}.DBD{si * 4}"
+                )
             elif style == "ab":
-                name = (f"B3:{mi}/{si}" if kind == "bool" else f"N7:{mi * 10 + si}" if kind == "int"
-                        else f"F8:{mi * 10 + si}")
+                name = (
+                    f"B3:{mi}/{si}"
+                    if kind == "bool"
+                    else f"N7:{mi * 10 + si}"
+                    if kind == "int"
+                    else f"F8:{mi * 10 + si}"
+                )
             else:
                 name = f"M{mi}_{ABBR[sig]}"
-            tags[(m, sig)] = {"tag": name, "machine": m, "signal": sig, "kind": kind, "unit": unit,
-                                   "vendor_style": style}
+            tags[(m, sig)] = {
+                "tag": name,
+                "machine": m,
+                "signal": sig,
+                "kind": kind,
+                "unit": unit,
+                "vendor_style": style,
+            }
     # the robot controller names its I/O by number only; the numbering is shuffled per seed
     r2 = random.Random(seed + 17)
     di, ai = r2.sample(range(4), 4), r2.sample(range(8), 8)
@@ -113,22 +157,28 @@ def make_tags(rng, seed):
             name = "ROB1.CNT0"
         else:
             name = f"ROB1.AI{ai.pop()}"
-        tags[("cobot", sig)] = {"tag": name, "machine": "cobot", "signal": sig, "kind": kind, "unit": unit,
-                                "vendor_style": "robot"}
+        tags[("cobot", sig)] = {
+            "tag": name,
+            "machine": "cobot",
+            "signal": sig,
+            "kind": kind,
+            "unit": unit,
+            "vendor_style": "robot",
+        }
     return tags
 
 
-INJECTABLE = {   # faults a judge can trigger live; each matches a rule in that machine's PLC program
+INJECTABLE = {  # faults a judge can trigger live; each matches a rule in that machine's PLC program
     "filler_wear": "Filler: bearing wears out (fails in about 5 min)",
     "glue_heater": "Labeller: glue heater fails (stops below 150 °C, about 3 min)",
     "capper_jam": "Capper: cap jam (30 s)",
     "cobot_zone": "Cobot: person walks into its safety zone (1 min)",
 }
-WEAR_FAST = 5 * 60          # an injected bearing failure: wear to breakdown in 5 simulated minutes
-GLUE_DROP = 20 / 240        # °C per second once the glue heater fails (crosses 150 °C after 3 min)
+WEAR_FAST = 5 * 60  # an injected bearing failure: wear to breakdown in 5 simulated minutes
+GLUE_DROP = 20 / 240  # °C per second once the glue heater fails (crosses 150 °C after 3 min)
 
 
-VIB_TRIP, VIB_HOLD = 7.2, 10    # the filler's PLC rule (plc_programs.py): vibration above 7.2 mm/s for 10 s
+VIB_TRIP, VIB_HOLD = 7.2, 10  # the filler's PLC rule (plc_programs.py): vibration above 7.2 mm/s for 10 s
 
 
 def simulate(minutes, seed, inject=None, events=None, calm=False):
@@ -144,7 +194,7 @@ def simulate(minutes, seed, inject=None, events=None, calm=False):
     st = {m: {"temp": 38.0, "count": 0.0, "cases": 0.0, "layers": 0.0} for m in MACHINES}
     cb = {"buffer": 0.0, "done": 0.0, "phase": 0.0}
     for t in range(minutes * 60):
-        for what in (inject(t) if inject else []):
+        for what in inject(t) if inject else []:
             if what == "filler_wear" and FAIL > t + WEAR_FAST:
                 WEAR, FAIL = (t, t + WEAR_FAST) if t < WEAR else (WEAR, t + WEAR_FAST)
             elif what == "glue_heater" and glue_fail_from is None:
@@ -154,7 +204,7 @@ def simulate(minutes, seed, inject=None, events=None, calm=False):
             elif what == "cobot_zone":
                 ZONES.append((t, 60))
         glue = 165.0 if glue_fail_from is None else max(120.0, 165.0 - (t - glue_fail_from) * GLUE_DROP)
-        if glue < 150.0 and labeller_failed_at is None:          # the labeller's PLC rule: glue below 150 °C
+        if glue < 150.0 and labeller_failed_at is None:  # the labeller's PLC rule: glue below 150 °C
             labeller_failed_at = t
         labeller_failed = labeller_failed_at is not None
         wear = min(1.0, max(0.0, (t - WEAR) / (FAIL - WEAR)))
@@ -179,9 +229,9 @@ def simulate(minutes, seed, inject=None, events=None, calm=False):
             if m == "capper" and capper_jammed:
                 running, fault = False, True
             if m == "filler" and capper_jammed:
-                speed_target = 120.0                    # blocked: capper isn't taking bottles
+                speed_target = 120.0  # blocked: capper isn't taking bottles
             elif m in ("labeller", "case_packer") and capper_jammed:
-                speed_target = 60.0                     # starved downstream
+                speed_target = 60.0  # starved downstream
             else:
                 speed_target = 300.0
             speed = (speed_target + rng.gauss(0, 3)) if running else 0.0
@@ -190,19 +240,33 @@ def simulate(minutes, seed, inject=None, events=None, calm=False):
             current = (2.0 + 9.0 * load + extra_i + rng.gauss(0, 0.15)) if running else rng.gauss(0.3, 0.05)
             temp_target = 35 + 25 * load + (28 * wear if m == "filler" else 0) + 7 * _dist(DIST, "warm", m, t)
             s["temp"] += (temp_target - s["temp"]) / 240 + rng.gauss(0, 0.05)
-            vib = (1.4 + 0.6 * load + (5.4 * wear ** 1.5 if m == "filler" else 0) + abs(rng.gauss(0, 0.2))
-                   + 2.0 * _dist(DIST, "bump", m, t)) \
-                if running else abs(rng.gauss(0.1, 0.05))
-            if m == "filler" and filler_tripped_at is None:           # the PLC's TON_VIB timer
+            vib = (
+                (
+                    1.4
+                    + 0.6 * load
+                    + (5.4 * wear**1.5 if m == "filler" else 0)
+                    + abs(rng.gauss(0, 0.2))
+                    + 2.0 * _dist(DIST, "bump", m, t)
+                )
+                if running
+                else abs(rng.gauss(0.1, 0.05))
+            )
+            if m == "filler" and filler_tripped_at is None:  # the PLC's TON_VIB timer
                 vib_over = vib_over + 1 if vib > VIB_TRIP else 0
                 if vib_over >= VIB_HOLD:
                     filler_tripped_at = t + 1
                     if events is not None:
                         events["filler_trip"] = t + 1
             s["count"] += speed / 60
-            vals = {"running": int(running), "fault": int(fault), "speed": round(speed, 1),
-                    "count": int(s["count"]), "motor_current": round(max(current, 0), 2),
-                    "motor_temp": round(s["temp"], 2), "vibration": round(vib, 2)}
+            vals = {
+                "running": int(running),
+                "fault": int(fault),
+                "speed": round(speed, 1),
+                "count": int(s["count"]),
+                "motor_current": round(max(current, 0), 2),
+                "motor_temp": round(s["temp"], 2),
+                "vibration": round(vib, 2),
+            }
             if m == "filler":
                 vals["fill_pressure"] = round((2.5 + rng.gauss(0, 0.03)) if running else 0.2, 3)
             if m == "capper":
@@ -210,7 +274,7 @@ def simulate(minutes, seed, inject=None, events=None, calm=False):
             if m == "labeller":
                 vals["glue_temp"] = round(glue + rng.gauss(0, 0.6), 2)
             if m == "case_packer":
-                case_rate = speed / 60 / 24                      # cases per second sent to the cobot
+                case_rate = speed / 60 / 24  # cases per second sent to the cobot
                 s["cases"] += case_rate
                 vals["case_count"] = int(s["cases"])
             if m == "depalletiser":
@@ -223,8 +287,8 @@ def simulate(minutes, seed, inject=None, events=None, calm=False):
         zone = any(s0 <= t < s0 + d for s0, d in ZONES)
         override = 30.0 if zone else 100.0
         cb["buffer"] += case_rate
-        capacity = (15 / 60) * override / 100                   # cases per second it can place
-        working = cb["buffer"] > 0.01                            # something to palletise (stops when line is down)
+        capacity = (15 / 60) * override / 100  # cases per second it can place
+        working = cb["buffer"] > 0.01  # something to palletise (stops when line is down)
         moved = min(cb["buffer"], capacity) if working else 0.0
         cb["buffer"] -= moved
         cb["done"] += moved
@@ -232,9 +296,15 @@ def simulate(minutes, seed, inject=None, events=None, calm=False):
         gripper = working and 0.2 <= cb["phase"] < 0.7
         motion = math.sin(2 * math.pi * cb["phase"])
         tcp = (1000 * override / 100 * (0.75 + 0.25 * abs(motion)) + rng.gauss(0, 12)) if working else 0.0
-        cv = {"running": int(working), "fault": 0, "gripper_closed": int(gripper), "zone_occupied": int(zone),
-              "cycle_count": int(cb["done"]), "tcp_speed": round(max(tcp, 0), 1),
-              "speed_override": override}
+        cv = {
+            "running": int(working),
+            "fault": 0,
+            "gripper_closed": int(gripper),
+            "zone_occupied": int(zone),
+            "cycle_count": int(cb["done"]),
+            "tcp_speed": round(max(tcp, 0), 1),
+            "speed_override": override,
+        }
         for j in range(1, 7):
             dyn = (0.25 * GRAVITY[j] * motion * override / 100) if working else 0.0
             tq = GRAVITY[j] + (PAYLOAD[j] if gripper else 0) + dyn + rng.gauss(0, 0.03 * GRAVITY[j] + 0.1)
@@ -249,22 +319,34 @@ CALM = False
 
 def write_answers(tags, seed, start, path="data/answers.json"):
     import plc_programs
-    plc_programs.render(tags)                                   # the machines' PLC code, with this run's tags
+
+    plc_programs.render(tags)  # the machines' PLC code, with this run's tags
     JAM, JAMS, WEAR, FAIL, ZONES = timeline(seed)
     at = lambda s: str(start + timedelta(seconds=s))
     key = {v["tag"]: {k: v[k] for k in ("machine", "signal", "kind", "unit", "vendor_style")} for v in tags.values()}
-    with open(path, "w", encoding="utf-8") as f:              # the decoder person must NOT open this
-        json.dump({"tags": key, "events": {
-            "capper_jams": [at(JAM[0]), at(JAM[1])],
-            "filler_wear_starts": at(WEAR), "filler_fails": at(FAIL),
-            "cobot_zone_visits": [[at(s0), at(s0 + d)] for s0, d in ZONES],
-            "disturbances": [] if CALM else [dict(d, start=at(d["start"]), end=at(d["end"])) for d in disturbances(seed)]}},
-            f, indent=1)
+    with open(path, "w", encoding="utf-8") as f:  # the decoder person must NOT open this
+        json.dump(
+            {
+                "tags": key,
+                "events": {
+                    "capper_jams": [at(JAM[0]), at(JAM[1])],
+                    "filler_wear_starts": at(WEAR),
+                    "filler_fails": at(FAIL),
+                    "cobot_zone_visits": [[at(s0), at(s0 + d)] for s0, d in ZONES],
+                    "disturbances": []
+                    if CALM
+                    else [dict(d, start=at(d["start"]), end=at(d["end"])) for d in disturbances(seed)],
+                },
+            },
+            f,
+            indent=1,
+        )
 
 
 class Injector:
     """Reads data/inject.json, which the dashboard writes when someone presses "Break it now".
     Only requests made after this run started count. Each one is logged in answers.json too."""
+
     PATH = "data/inject.json"
 
     def __init__(self, start):
@@ -289,7 +371,8 @@ class Injector:
             with open("data/answers.json", encoding="utf-8") as f:
                 ans = json.load(f)
             ans["events"].setdefault("injected", []).append(
-                {"what": req["what"], "at": str(self.start + timedelta(seconds=t))})
+                {"what": req["what"], "at": str(self.start + timedelta(seconds=t))}
+            )
             with open("data/answers.json", "w", encoding="utf-8") as f:
                 json.dump(ans, f, indent=1)
         except (OSError, ValueError, KeyError):
@@ -318,7 +401,7 @@ def main():
         CALM = a.calm
         for t, row, tags in simulate(a.minutes, a.seed, inject, events, a.calm):
             if not recorded and "filler_trip" in events and os.path.exists("data/answers.json"):
-                recorded = True                                # the real moment the PLC rule tripped
+                recorded = True  # the real moment the PLC rule tripped
                 with open("data/answers.json", encoding="utf-8") as f:
                     ans = json.load(f)
                 ans["events"]["filler_fails"] = str(start + timedelta(seconds=events["filler_trip"]))
@@ -326,10 +409,11 @@ def main():
                     json.dump(ans, f, indent=1)
             if cols is None:
                 cols = list(row)
-                random.Random(a.seed).shuffle(cols)            # column/register order changes with the seed
+                random.Random(a.seed).shuffle(cols)  # column/register order changes with the seed
                 write_answers(tags, a.seed, start)
                 if a.plc:
                     import plc
+
                     kinds = {v["tag"]: v["kind"] for v in tags.values()}
                     regmap = plc.build_map(cols, kinds)
                     plc.save_map(regmap)
@@ -349,7 +433,7 @@ def main():
                 time.sleep(1 / a.speed)
                 if t % 60 == 0:
                     print(f"sim minute {t // 60}")
-        if a.plc:                                              # keep serving the last values until stopped
+        if a.plc:  # keep serving the last values until stopped
             print("run finished; PLC keeps serving the final values (Ctrl+C to stop)")
             while True:
                 time.sleep(1)

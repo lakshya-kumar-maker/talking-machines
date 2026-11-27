@@ -5,6 +5,7 @@ Only READ functions are answered (03 read holding registers, 04 read input regis
 Every WRITE request (05, 06, 15, 16, …) is refused with Modbus exception 01 "illegal function":
 Talking Machines can never change anything on a machine.
 """
+
 import json
 import os
 import socket
@@ -13,7 +14,7 @@ import struct
 import threading
 
 READ_FUNCTIONS = (3, 4)
-MAX_REGS = 125                                  # Modbus limit per read request
+MAX_REGS = 125  # Modbus limit per read request
 
 
 # ── register map: where each tag lives in the PLC ─────────────────────────
@@ -127,14 +128,14 @@ class PLCServer:
                         addr, qty = struct.unpack(">HH", body[1:5])
                         with plc.lock:
                             ok = 1 <= qty <= MAX_REGS and addr + qty <= len(plc.regs)
-                            data = plc.regs[addr:addr + qty] if ok else []
+                            data = plc.regs[addr : addr + qty] if ok else []
                         if ok:
                             pdu = struct.pack(">BB", fc, 2 * qty) + struct.pack(f">{qty}H", *data)
                         else:
-                            pdu = struct.pack(">BB", fc | 0x80, 2)          # 02 illegal data address
+                            pdu = struct.pack(">BB", fc | 0x80, 2)  # 02 illegal data address
                     else:
                         plc.refused_writes += 1
-                        pdu = struct.pack(">BB", fc | 0x80, 1)              # 01 illegal function: read-only
+                        pdu = struct.pack(">BB", fc | 0x80, 1)  # 01 illegal function: read-only
                     sock.sendall(struct.pack(">HHHB", tid, 0, len(pdu) + 1, uid) + pdu)
 
         self.server = _Server((host, port), Handler)
@@ -142,7 +143,7 @@ class PLCServer:
 
     def update(self, regs):
         with self.lock:
-            self.regs[:len(regs)] = regs
+            self.regs[: len(regs)] = regs
 
     def close(self):
         self.server.shutdown()
@@ -189,12 +190,12 @@ class PLCClient:
 
     def read_registers(self, addr, qty):
         out = []
-        while qty > 0:                                       
+        while qty > 0:
             n = min(qty, MAX_REGS)
             resp = self._ask(struct.pack(">BHH", 3, addr, n))
             if resp[0] & 0x80:
                 raise IOError(f"PLC refused the read (exception {resp[1]})")
-            out += list(struct.unpack(f">{n}H", resp[2:2 + 2 * n]))
+            out += list(struct.unpack(f">{n}H", resp[2 : 2 + 2 * n]))
             addr, qty = addr + n, qty - n
         return out
 
@@ -212,10 +213,10 @@ def save_map(regmap, path="data/plc_map.json"):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(regmap, f, indent=1)
-    os.replace(tmp, path)                       # atomic: the collector never sees a half-written map
+    os.replace(tmp, path)  # atomic: the collector never sees a half-written map
 
 
 def load_map(path="data/plc_map.json"):
     with open(path, encoding="utf-8") as f:
         m = json.load(f)
-    return m.get("map", m)                       # data/openplc/map.json keeps the map under "map"
+    return m.get("map", m)  # data/openplc/map.json keeps the map under "map"
