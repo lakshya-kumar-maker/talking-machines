@@ -1,7 +1,7 @@
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-extend-exclude = ["talking-machines", "data"]
+extend-exclude = ["data"]
 
 [tool.ruff.lint]
 # The classic, behaviour-safe set: pyflakes, syntax/statement errors and import sorting.
