@@ -107,4 +107,8 @@ if __name__ == "__main__":
     if what == "ai4i":
         train_ai4i()
     else:
-        explain(drift_warnings())
+        import json, os
+        names = None
+        if os.path.exists("data/decoded.json"):
+            names = {t: r["name"] for t, r in json.load(open("data/decoded.json", encoding="utf-8")).items()}
+        explain(drift_warnings(names=names))
