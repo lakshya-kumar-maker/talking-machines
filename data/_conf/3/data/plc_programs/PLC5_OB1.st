@@ -1,9 +1,0 @@
-N7:57 := N7:53 / 24;
-IF M2_FLT THEN
-    B3:5/0 := FALSE;
-ELSIF NOT M3_RUN THEN
-    F8:52 := 60.0;
-ELSE
-    B3:5/0 := TRUE;
-    F8:52 := 300.0;
-END_IF;
