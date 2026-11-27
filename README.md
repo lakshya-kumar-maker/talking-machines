@@ -137,6 +137,47 @@ python collector.py --test-write          # prove writes are refused
 | `warning.py` | Drift early warning + AI4I 2020 failure model |
 | `line.py` | Machine status, causes, alert cards, Ask the Line |
 
+## Project structure
+
+| File | What it does |
+|---|---|
+| `app.py` | Streamlit dashboard: Live line, Work Orders, Tag Translator, PLC Logic, Line Map, Ask the Line |
+| `simulator.py` | Simulated bottling line + cobot (jams, wear, failure, injectable faults); writes a CSV or acts as a Modbus PLC |
+| `plc.py` | Minimal Modbus TCP server and client, standard library only; the server refuses every write |
+| `collector.py` | Reads the PLC over Modbus TCP (read-only) and appends rows to `data/stream.csv`, like a plant historian |
+| `plc_programs.py` | Each machine's control program in Structured Text, rendered with the run's tag names |
+| `decoder.py` | Works out what each cryptic tag means and which machine it belongs to, from behaviour alone |
+| `translator.py` | Structured Text parser: PLC code → plain English, plus fault rules and trip limits |
+| `warning.py` | Single-signal drift early warnings + the AI4I 2020 failure model |
+| `anomaly.py` | Isolation Forest second opinion: a machine's signals looked at together |
+| `prediction.py` | Time until failure: a drifting signal's trend extended to its PLC trip limit |
+| `dependency.py` | Machine dependency map, learned from the data and from the PLC code |
+| `confidence.py` | Measured confidence % for each alert (logistic regression over many simulated runs) |
+| `maintenance.py` | Work orders, checklists, parts and the printable shift report |
+| `line.py` | Ties it all together: machine status, downtime cost, alert cards, Ask the Line answers |
+| `openplc_export.py` | Exports all six controllers as one program for OpenPLC Runtime |
+| `plant.py` | Plays the machines against a real soft PLC (OpenPLC) over Modbus TCP |
+| `softplc.py` | Small stand-in for OpenPLC, for testing without installing it |
+| `softpic.py` | Older duplicate of `softplc.py`; not used by anything |
+| `test_llm.py` | Quick check that the Groq and Gemini API keys in `.env` work |
+| `tests/` | pytest suite (see below) |
+
+## Run the tests
+
+```powershell
+pytest -q
+```
+
+The tests simulate runs into a temporary folder (they never touch `data/`) and check that the decoder scores
+53/53, the PLC translator and trip limits, the read-only Modbus link, the soft PLC's timers, the failure
+forecast, the dependency map and the rupee formatting. They take a few seconds.
+
+## Real PLC (OpenPLC)
+
+Talking Machines can also read a real soft PLC: OpenPLC Runtime runs the machines' Structured Text, `plant.py`
+plays the machines, and the collector reads the PLC over Modbus TCP, read-only. In the dashboard pick
+**OpenPLC (real soft PLC)** in the sidebar. Step-by-step setup: [OPENPLC_SETUP.md](OPENPLC_SETUP.md).
+
 ## Built with
 
 Python · pandas · NumPy · scikit-learn · Streamlit · Modbus TCP · Groq (`gpt-oss-120b`) · Google Gemini · AI4I 2020 dataset (UCI)

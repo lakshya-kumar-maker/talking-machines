@@ -14,3 +14,9 @@ data/plc_map.json
 data/plc_programs/
 data/inject.json
 data/inject.json.tmp
+.pytest_cache/
+.ruff_cache/
+data/openplc/
+data/_conf/
+data/_cut.csv
+baseline.txt
