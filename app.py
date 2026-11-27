@@ -195,8 +195,8 @@ def clock(df):
                                          f"{lp['speed']}× speed")
 
 
-tab_live, tab_tags, tab_plc, tab_map, tab_ask = st.tabs(["Live line", "Tag Translator", "PLC Logic", "Line Map",
-                                                          "Ask the Line"])
+tab_live, tab_work, tab_tags, tab_plc, tab_map, tab_ask = st.tabs(
+    ["Live line", "Work Orders", "Tag Translator", "PLC Logic", "Line Map", "Ask the Line"])
 
 
 @st.fragment(run_every=f"{REFRESH}s")
@@ -235,6 +235,15 @@ def live():
                            + ("🧍 person in safety zone" if r["zone"] else "safety zone clear"))
             else:
                 st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
+
+    # the single most important thing to do (details in the Work Orders tab)
+    try:
+        import maintenance
+        orders = line.work_orders(df, dec)
+        if orders and orders[0]["when"][0] in "NB":
+            st.warning("🛠 " + maintenance.summary(orders[0], line.rupees) + "  → see **Work Orders**")
+    except Exception as e:
+        st.caption(f"(work orders unavailable: {type(e).__name__}: {e})")
 
     # time until failure: the drifting signal's trend, extended to the limit in the machine's PLC program
     preds = line.predictions(df, dec)
@@ -500,6 +509,54 @@ def line_map():
     else:
         st.success("No machine has affected another one yet.")
 
+
+@st.fragment(run_every=f"{TAB_REFRESH}s")
+def work_tab():
+    data = current()
+    if data is None or len(data[0]) < MIN_ROWS:
+        st.info("Work orders appear once the line has been watched for about 3 simulated minutes.")
+        return
+    import maintenance
+    df, dec, warns = data
+    cards = line.alert_cards(df, dec)
+    orders = line.work_orders(df, dec, cards)
+    now = df["timestamp"].iloc[-1]
+    st.write(f"**What to do, most urgent first** · line time {now:%H:%M} · priority = confidence × money at "
+             f"risk ÷ time left · one line-minute costs {line.rupees(line.line_cost_per_min(df, dec))}")
+    if not orders:
+        st.success("Nothing to do: no machine has an alert or a fault.")
+    for i, o in enumerate(orders, 1):
+        icon = {"N": "🔴", "B": "🟠", "W": "⚪"}.get(o["when"][0], "🟡")
+        with st.container(border=True):
+            conf = "fault is on" if o["fault"] else (f"{o['confidence']}% confident" if o["confidence"] is not None else "")
+            st.markdown(f"**{icon} {i}. {o['machine']}: {o['problem']}** · {o['when']} · {conf}")
+            st.write(o["slot"])
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Planned repair", f"{o['planned_min']} min")
+            c2.metric("If it breaks first", f"{o['unplanned_min']} min")
+            c3.metric("Money at risk" if not o["fault"] else "Line cost per minute",
+                      line.rupees(o["at_risk"]) if not o["fault"] else line.rupees(o["at_risk"] / o["unplanned_min"]))
+            with st.expander("Checklist, parts and tools"):
+                st.markdown("\n".join(f"- ☐ {x}" for x in o["checklist"]))
+                st.markdown(f"**Parts:** {', '.join(o['parts']) or '–'}  \n**Tools:** {', '.join(o['tools'])}")
+                if o["evidence"]:
+                    st.caption("Evidence: " + " · ".join(o["evidence"]))
+    st.divider()
+    names = line.decoder.MACHINE_NAMES
+    wo = maintenance.work_order_html(orders, now, line.rupees)
+    rep = maintenance.shift_report_html(df, cards, orders, line.downtime(df, dec, line.PRICE), line.events(df, dec),
+                                        warns, line.rupees, names, line.predictions(df, dec))
+    d1, d2 = st.columns(2)
+    d1.download_button("⬇ Work orders (print or save as PDF)", wo, file_name=f"work_orders_{now:%H%M}.html",
+                       mime="text/html", use_container_width=True)
+    d2.download_button("⬇ Shift report (print or save as PDF)", rep, file_name=f"shift_report_{now:%H%M}.html",
+                       mime="text/html", use_container_width=True)
+    st.caption("Open the file in a browser, then Print → Save as PDF. Repair times and parts are typical figures "
+               "for a small bottling line; a plant would put its own in maintenance.py.")
+
+
+with tab_work:
+    work_tab()
 
 with tab_tags:
     tag_translator()

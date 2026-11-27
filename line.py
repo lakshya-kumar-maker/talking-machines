@@ -358,6 +358,18 @@ def dependency_text(df, dec, machine=None):
     return " ".join(dependency.describe(e, decoder.MACHINE_NAMES) + "." for e in edges)
 
 
+def line_cost_per_min(df, dec):
+    d = downtime(df, dec, PRICE)
+    return round(d["rated"], -1) * PRICE if d else 300 * PRICE
+
+
+def work_orders(df, dec, cards=None):
+    """Prioritised work orders for the current alerts (maintenance.py)."""
+    import maintenance
+    cards = alert_cards(df, dec) if cards is None else cards
+    return maintenance.plan(cards, line_cost_per_min(df, dec), df["timestamp"].iloc[-1])
+
+
 def forest_text(df, dec):
     _, found = forest(df, dec)
     names = decoder.MACHINE_NAMES
@@ -634,6 +646,23 @@ def rule_answer(question, df, dec, warns):
         who = f"the {names[asked].lower()} isn't" if asked else "no machine is"
         return (f"Right now {who} heading for a PLC trip limit, so there's nothing to forecast. A forecast appears "
                 "once a signal has moved clearly from normal towards its limit.", "signals: all trip-limit signals")
+
+    if any(w in q for w in ("what should", "fix first", "do first", "priority", "priorit", "work order",
+                            "maintenance", "repair", "inspect", "what to check", "what do i check", "to do",
+                            "bring", "parts", "tools")):
+        import maintenance
+        orders = work_orders(df, dec)
+        if asked:
+            orders = [o for o in orders if o["machine"] == names[asked]] or orders
+        if not orders:
+            return ("Nothing to do right now: no machine has an alert or a fault.", "source: alerts + maintenance plan")
+        o = orders[0]
+        text = maintenance.summary(o, rupees) + " Check: " + " · ".join(o["checklist"][1:4]) + ". " + \
+            ("Bring: " + ", ".join(o["parts"]) + "." if o["parts"] else "")
+        if len(orders) > 1:
+            text += " After that: " + "; ".join(f"{x['machine'].lower()} ({x['problem'].lower()}, {x['when'].lower()})"
+                                                for x in orders[1:3]) + "."
+        return text, "source: alerts, confidence, forecast and downtime cost → maintenance plan"
 
     if deps_q:
         names_ = decoder.MACHINE_NAMES
