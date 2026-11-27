@@ -161,6 +161,8 @@ def facts(df, dec, warns):
     lines.append("Warnings so far: " + ("; ".join(warns) if warns else "none"))
     lines.append(cost_text(downtime(df, dec, PRICE), warns))
     lines.append(forest_text(df, dec))
+    lines.append("Dependency map (which machine stops or slows which; from the data and from the PLC code): "
+                 + (dependency_text(df, dec) or "nothing seen yet."))
     lines.append("Time-to-failure forecasts: " + (prediction_text(df, dec) or "no machine is heading for a PLC trip limit."))
     for f, t in program_rules(dec).items():
         if t["machine"]:
@@ -328,6 +330,32 @@ def prediction_text(df, dec, machine=None):
     import prediction
     found = [p for p in predictions(df, dec) if machine in (None, p["machine"])]
     return " ".join(prediction.describe(p, decoder.MACHINE_NAMES) for p in found)
+
+
+_DEPS = {}
+DEPS_ERROR = None
+
+
+def dependencies(df, dec):
+    """The machine dependency map (dependency.py): data + PLC code, cached per data."""
+    global DEPS_ERROR
+    key = (len(df), str(df["timestamp"].iloc[-1]), tuple(sorted((t, r["signal"]) for t, r in dec.items())))
+    if key not in _DEPS:
+        try:
+            import dependency
+            _DEPS.clear()
+            _DEPS[key] = dependency.build(df, dec)
+            DEPS_ERROR = None
+        except Exception as e:
+            DEPS_ERROR = f"{type(e).__name__}: {e}"
+            return []
+    return _DEPS[key]
+
+
+def dependency_text(df, dec, machine=None):
+    import dependency
+    edges = [e for e in dependencies(df, dec) if machine in (None, e["source"], e["target"])]
+    return " ".join(dependency.describe(e, decoder.MACHINE_NAMES) + "." for e in edges)
 
 
 def forest_text(df, dec):
@@ -511,7 +539,9 @@ def rule_answer(question, df, dec, warns):
 
     future = any(w in q for w in ("when will", "how long", "how soon", "time left", "predict", "forecast",
                                   "will it", "going to"))
-    if asked and not future and any(w in q for w in ("slow", "stop", "why", "down", "happen")):
+    deps_q = any(w in q for w in ("depend", "affect", "impact", "what happens if", "what happens when", "linked",
+                                  "connected", "knock-on", "knock on", "downstream", "upstream", "relation"))
+    if asked and not future and not deps_q and any(w in q for w in ("slow", "stop", "why", "down", "happen")):
         mine = sp.get(asked, {})
         trouble = sorted(mine.get("ran slow", []) + mine.get("stopped", []))
         if not trouble:
@@ -570,6 +600,36 @@ def rule_answer(question, df, dec, warns):
         who = f"the {names[asked].lower()} isn't" if asked else "no machine is"
         return (f"Right now {who} heading for a PLC trip limit, so there's nothing to forecast. A forecast appears "
                 "once a signal has moved clearly from normal towards its limit.", "signals: all trip-limit signals")
+
+    if deps_q:
+        names_ = decoder.MACHINE_NAMES
+        edges = [e for e in dependencies(df, dec) if asked in (None, e["source"], e["target"])]
+        if not edges:
+            return ("No machine has affected another one yet, and no PLC program links them.",
+                    "source: dependency map (data + PLC code)")
+        out_ = [e for e in edges if asked is None or e["source"] == asked]
+        in_ = [e for e in edges if asked is not None and e["target"] == asked]
+
+        def say(e):
+            d, c = e["data"], e["code"]
+            ev = []
+            if d:
+                ev.append(f"seen {d['stops'] + d['slows']} of {d['faults']} times")
+            if c:
+                ev.append(f"rule in {c['file']}")
+            return (f"the {names_[e['source']].lower()} {e['effect']} the {names_[e['target']].lower()} "
+                    f"({', '.join(ev)})")
+        text = []
+        if out_:
+            text.append(("When it has a fault, " if asked else "") + "; ".join(say(e) for e in out_) + ".")
+        if in_:
+            text.append("It is affected by: " + "; ".join(say(e) for e in in_) + ".")
+        hidden = [e for e in edges if e["status"] == "seen in data"]
+        if hidden:
+            text.append("Not written in any PLC program but seen in the data: " + "; ".join(
+                f"{names_[e['source']].lower()} → {names_[e['target']].lower()}" for e in hidden)
+                + " (a physical knock-on: bottles or cases backing up or running out).")
+        return " ".join(text), "source: dependency map (fault onsets in the data + the PLC programs)"
 
     drifting = _drifting(warns)
     faults_now = [m for m in MACHINE_ORDER if st.loc[MACHINE_ORDER.index(m), "fault"]]

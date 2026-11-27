@@ -195,7 +195,8 @@ def clock(df):
                                          f"{lp['speed']}× speed")
 
 
-tab_live, tab_tags, tab_plc, tab_ask = st.tabs(["Live line", "Tag Translator", "PLC Logic", "Ask the Line"])
+tab_live, tab_tags, tab_plc, tab_map, tab_ask = st.tabs(["Live line", "Tag Translator", "PLC Logic", "Line Map",
+                                                          "Ask the Line"])
 
 
 @st.fragment(run_every=f"{REFRESH}s")
@@ -453,8 +454,53 @@ def plc_logic():
             st.warning("No AI service reachable; the rule-by-rule translation above is exact.")
 
 
+@st.fragment(run_every=f"{TAB_REFRESH}s")
+def line_map():
+    data = current()
+    if data is None or len(data[0]) < MIN_ROWS:
+        n = 0 if data is None else len(data[0])
+        st.info(f"The Line Map needs the decoded tag names: about 3 simulated minutes of data ({n} of {MIN_ROWS} "
+                "seconds so far). This page updates by itself.")
+        return
+    import dependency
+    df, dec, _ = data
+    edges = line.dependencies(df, dec)
+    if line.DEPS_ERROR:
+        st.error(f"The Line Map couldn't be built: {line.DEPS_ERROR}. Check that dependency.py is in the folder.")
+        return
+    names = line.decoder.MACHINE_NAMES
+    st.write("**Which machine stops or slows which, learned two ways.** From the data: every time a machine's "
+             "fault light came on, which others stopped or slowed in the next 30 s. From the PLC code: which "
+             "other machines each program checks, and what it does then.")
+    st.graphviz_chart(dependency.graph_dot(edges, names), use_container_width=True)
+    st.caption("🟢 confirmed (data and code agree) · 🟠 seen in the data only (a physical knock-on no program "
+               "describes) · 🔵 dashed: in the code, not triggered yet · grey dots: the conveyor order · "
+               "thicker = seen more often")
+    if edges:
+        rows = []
+        for e in edges:
+            d, c = e["data"], e["code"]
+            rows.append({"From": names[e["source"]], "To": names[e["target"]], "Effect": e["effect"],
+                         "In the data": (f"{d['stops'] + d['slows']} of {d['faults']} faults" if d else "–"),
+                         "In the PLC code": (f"{c['file']}: when {c['when']}"
+                                             + (f" → {c['speed']:g}/min" if c.get("speed") else "") if c else "–"),
+                         "Status": e["status"]})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        hidden = [e for e in edges if e["status"] == "seen in data"]
+        if hidden:
+            st.info("🔎 Found in the data but written in no PLC program: " + ", ".join(
+                f"{names[e['source']]} → {names[e['target']]}" for e in hidden)
+                + ". These are physical knock-ons (bottles or cases backing up or running out), the kind of "
+                  "dependency nobody documented.")
+    else:
+        st.success("No machine has affected another one yet.")
+
+
 with tab_tags:
     tag_translator()
+
+with tab_map:
+    line_map()
 
 with tab_plc:
     plc_logic()
