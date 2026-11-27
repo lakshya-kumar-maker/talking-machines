@@ -240,50 +240,80 @@ with tab_live:
     live()
 
 
-with tab_tags:
+TAB_REFRESH = 10                    # the side tabs update by themselves every few seconds
+
+
+@st.fragment(run_every=f"{TAB_REFRESH}s")
+def tag_translator():
     data = current()
     if data is None or len(data[0]) < MIN_ROWS:
-        st.info("The Tag Translator needs about 3 simulated minutes of data. Switch tabs again in a moment.")
-    else:
-        df, dec, _ = data
-        last = df.iloc[-1]
-        table = pd.DataFrame([{"Tag": t, "Means": r["name"], "Unit": r["unit"], "Confidence": r["confidence"],
-                               "Latest value": last[t], "Why": r["reason"]} for t, r in dec.items()])
-        table = table.sort_values(["Means"]).reset_index(drop=True)
-        low = int((table["Confidence"] == "low").sum())
-        st.write(f"**{len(table)} signals decoded from how they behave** · {low} marked low confidence "
-                 f"· as of {df['timestamp'].iloc[-1]:%H:%M:%S}")
-        st.dataframe(table, use_container_width=True, hide_index=True, height=560)
+        n = 0 if data is None else len(data[0])
+        st.info(f"The Tag Translator needs about 3 simulated minutes of data ({n} of {MIN_ROWS} seconds so far). "
+                "This page updates by itself.")
+        return
+    df, dec, _ = data
+    last = df.iloc[-1]
+    table = pd.DataFrame([{"Tag": t, "Means": r["name"], "Unit": r["unit"], "Confidence": r["confidence"],
+                           "Latest value": last[t], "Why": r["reason"]} for t, r in dec.items()])
+    table = table.sort_values(["Means"]).reset_index(drop=True)
+    low = int((table["Confidence"] == "low").sum())
+    st.write(f"**{len(table)} signals decoded from how they behave** · {low} marked low confidence "
+             f"· as of {df['timestamp'].iloc[-1]:%H:%M:%S}")
+    st.dataframe(table, use_container_width=True, hide_index=True, height=560)
 
 
-with tab_plc:
-    import translator
+@st.fragment(run_every=f"{TAB_REFRESH}s")
+def plc_logic():
+    try:
+        import translator
+    except Exception as e:
+        st.error(f"translator.py is missing or broken: {e}")
+        return
     data = current()
     folder = "data/plc_programs"
     files = sorted(f for f in os.listdir(folder) if f.endswith(".st")) if os.path.isdir(folder) else []
-    if data is None or len(data[0]) < MIN_ROWS or not files:
-        st.info("The PLC Logic translator needs the decoded tag names (about 3 simulated minutes of data).")
-    else:
-        dec = data[1]
+    if not files:
+        st.warning("No PLC programs found in data/plc_programs. Check that plc_programs.py is in the project "
+                   "folder, then press ▶ Restart line in the sidebar.")
+        return
+    if data is None or len(data[0]) < MIN_ROWS:
+        n = 0 if data is None else len(data[0])
+        st.info(f"The PLC Logic translator needs the decoded tag names: about 3 simulated minutes of data "
+                f"({n} of {MIN_ROWS} seconds so far). This page updates by itself.")
+        return
+    dec = data[1]
+    try:
         progs = translator.translate_all(folder, dec)
-        label = lambda f: f"{f}  →  {line.decoder.MACHINE_NAMES.get(progs[f]['machine'], 'unknown machine')}"
-        st.write("Each machine's own control program, read straight from the PLC export. The code uses the plant's "
-                 "cryptic tags and has no comments; we translate it rule by rule using the decoded names.")
-        pick = st.selectbox("Program", files, format_func=label, key="pick_program")
-        t = progs[pick]
-        for n, r in enumerate(t["rules"], 1):
-            left, right = st.columns([1, 1])
-            left.code(r["code"], language="pascal")
-            right.markdown(f"**Rule {n}.** {r['english']}")
-        if t["unknown"]:
-            st.caption("Not decoded (internal flags with no live data): " + ", ".join(t["unknown"]))
-        if st.button("Summarise this program with AI"):
-            with st.spinner("Summarising…"):
-                summary = translator.summarise(t)
-            if summary:
-                st.success(summary)
-            else:
-                st.warning("No AI service reachable; the rule-by-rule translation above is exact.")
+    except Exception as e:
+        st.error(f"Couldn't translate the programs: {type(e).__name__}: {e}")
+        return
+    label = lambda f: f"{f}  →  {line.decoder.MACHINE_NAMES.get(progs[f]['machine'], 'unknown machine')}"
+    st.write("Each machine's own control program, read straight from the PLC export. The code uses the plant's "
+             "cryptic tags and has no comments; we translate it rule by rule using the decoded names.")
+    pick = st.selectbox("Program", files, format_func=label, key="pick_program")
+    t = progs[pick]
+    for n, r in enumerate(t["rules"], 1):
+        left, right = st.columns([1, 1])
+        left.code(r["code"], language="pascal")
+        right.markdown(f"**Rule {n}.** {r['english']}")
+    if t["unknown"]:
+        st.caption("Not decoded (internal flags with no live data): " + ", ".join(t["unknown"]))
+    summaries = st.session_state.setdefault("plc_summaries", {})
+    if st.button("Summarise this program with AI"):
+        with st.spinner("Summarising…"):
+            summaries[pick] = translator.summarise(t) or ""
+    if pick in summaries:
+        if summaries[pick]:
+            st.success(summaries[pick])
+        else:
+            st.warning("No AI service reachable; the rule-by-rule translation above is exact.")
+
+
+with tab_tags:
+    tag_translator()
+
+with tab_plc:
+    plc_logic()
 
 
 with tab_ask:
