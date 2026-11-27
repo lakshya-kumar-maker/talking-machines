@@ -61,6 +61,32 @@ def map_size(regmap):
     return max(s["addr"] + (1 if s["type"] == "bool" else 2) for s in regmap.values())
 
 
+# ── helpers started by the dashboard stop when it does ─────────────────────
+def exit_with_parent(env="TM_PARENT_PID", every=1.0):
+    """If the dashboard that started this process dies (closed terminal, crash), exit too, so an old
+    simulator never keeps port 5020 busy and blocks the next start. Does nothing when run by hand."""
+    pid = os.environ.get(env)
+    if not pid:
+        return
+    pid = int(pid)
+    if os.name == "nt":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(0x00100000, False, pid)            # SYNCHRONIZE
+        if not handle:
+            os._exit(0)                                             # parent already gone
+        alive = lambda: k32.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT: still running
+    else:
+        alive = lambda: os.getppid() == pid
+
+    def watch():
+        import time
+        while alive():
+            time.sleep(every)
+        os._exit(0)
+    threading.Thread(target=watch, daemon=True).start()
+
+
 # ── server: the simulated PLC ──────────────────────────────────────────────
 class PLCServer:
     def __init__(self, size, host="127.0.0.1", port=5020):

@@ -23,7 +23,7 @@ NAMES = {"running": ("Running", ""), "fault": ("Fault", ""), "speed": ("Speed", 
          # palletising cobot
          "gripper_closed": ("Gripper closed", ""), "zone_occupied": ("Safety zone occupied", ""),
          "cycle_count": ("Cases palletised", "cases"), "tcp_speed": ("Tool speed", "mm/s"),
-         "speed_override": ("Speed override", "%"),
+         "speed_override": ("Speed override", "%"), "unseen": ("On/off signal (not seen switching yet)", ""),
          "j1_torque": ("Joint 1 (base) torque", "Nm"), "j2_torque": ("Joint 2 (shoulder) torque", "Nm"),
          "j3_torque": ("Joint 3 (elbow) torque", "Nm"), "j4_torque": ("Joint 4 (wrist 1) torque", "Nm"),
          "j5_torque": ("Joint 5 (wrist 2) torque", "Nm"), "j6_torque": ("Joint 6 (wrist 3) torque", "Nm")}
@@ -78,9 +78,17 @@ def classify_group(df, tags):
                       key=lambda t: -fp[t]["rate_per_min"])
     reals = [t for t in tags if t not in bools and t not in counters]
 
-    for t in bools:                                   # running is mostly 1, a fault flag mostly 0
-        out[t] = "running" if fp[t]["share_ones"] >= 0.5 else "fault"
-        reasons[t] = f"on/off signal, on {fp[t]['share_ones']:.0%} of the time"
+    # running is on at the start of the shift and on most of the time; a fault flag is off at the start.
+    # Judging by the start too keeps this right after a long breakdown, when the fault light was on for ages.
+    head = df.head(120)
+    rank = sorted(bools, key=lambda t: (head[t].mean(), fp[t]["share_ones"]), reverse=True)
+    for i, t in enumerate(rank):
+        if len(rank) > 1:
+            out[t] = "running" if i == 0 else "fault"
+        else:
+            out[t] = "running" if head[t].mean() >= 0.5 else "fault"
+        reasons[t] = f"on/off signal, on {fp[t]['share_ones']:.0%} of the time" + \
+                     (", on from the start of the shift" if out[t] == "running" else "")
     if counters:
         main = counters[0]
         out[main] = "count"
@@ -92,6 +100,11 @@ def classify_group(df, tags):
 
     run = next((t for t in bools if out[t] == "running"), None)
     on = df[run] > 0.5 if run else pd.Series(True, index=df.index)
+    if on.sum() < 30:                                 # hardly ever ran: fall back to all the data
+        on = pd.Series(True, index=df.index)
+    off = ~on
+    # statistics while the machine runs, so a long stoppage doesn't change what a signal looks like
+    med = {t: float(df.loc[on, t].median()) for t in reals}
     left = list(reals)
 
     def take(name, pick, why):
@@ -102,17 +115,19 @@ def classify_group(df, tags):
 
     # speed: matches how fast the bottle counter climbs (bottles per minute)
     if counters:
-        rate = float(df[counters[0]].diff().rolling(60).sum().median())
-        cand = [t for t in left if rate > 0 and abs(fp[t]["median"] - rate) < 0.15 * rate]
+        rate = float(df[counters[0]].diff().rolling(60).sum()[on].median())
+        cand = [t for t in left if rate > 0 and abs(med[t] - rate) < 0.15 * rate]
         if cand:
-            t = min(cand, key=lambda t: abs(fp[t]["median"] - rate))
-            take("speed", t, f"around {fp[t]['median']:.0f}, the same as the counter's {rate:.0f} per minute")
+            t = min(cand, key=lambda t: abs(med[t] - rate))
+            take("speed", t, f"around {med[t]:.0f} while running, the same as the counter's {rate:.0f} per minute")
     speed = next((t for t, n in out.items() if n == "speed"), None)
 
-    # heater: high and steady even when the machine stops
+    # heater: high and steady, and stays high when the machine stops
     for t in list(left):
-        if fp[t]["median"] > 100 and df[t].diff().abs().median() < 1.5:        # hot, and moves only slowly
-            take("glue_temp", t, f"steady around {fp[t]['median']:.0f} even when stopped (a heater)")
+        steady = df.loc[on, t].diff().abs().median() < 1.5                     # hot, and moves only slowly
+        stays_hot = off.sum() < 30 or df.loc[off, t].median() > 100
+        if med[t] > 100 and steady and stays_hot:
+            take("glue_temp", t, f"steady around {med[t]:.0f} even when stopped (a heater)")
 
     # temperature: 20-90 and changes slowly
     temps = [t for t in left if 20 <= fp[t]["median"] <= 90 and fp[t]["smooth"] < 0.05]
@@ -125,19 +140,19 @@ def classify_group(df, tags):
         corr = {t: abs(df.loc[on, t].corr(df.loc[on, speed])) if on.sum() > 30 else 0 for t in left}
         corr = {t: (c if c == c else 0) for t, c in corr.items()}
         t = max(corr, key=corr.get)
-        if fp[t]["median"] > 3:
-            take("motor_current", t, f"rises and falls with speed (r={corr[t]:.2f}), about {fp[t]['median']:.1f}")
+        if med[t] > 3:
+            take("motor_current", t, f"rises and falls with speed (r={corr[t]:.2f}), about {med[t]:.1f}")
 
     # vibration: small, noisy, never exactly steady while running
-    noisy = [t for t in left if fp[t]["median"] < 10 and df.loc[on, t].std() > 0.1]
+    noisy = [t for t in left if med[t] < 10 and df.loc[on, t].std() > 0.1]
     if noisy:
-        t = max(noisy, key=lambda t: df.loc[on, t].std() / (abs(fp[t]["median"]) or 1))
-        take("vibration", t, f"small and noisy, about {fp[t]['median']:.1f}")
+        t = max(noisy, key=lambda t: df.loc[on, t].std() / (abs(med[t]) or 1))
+        take("vibration", t, f"small and noisy, about {med[t]:.1f}")
 
     # whatever is left is the machine's own process value
     for t in left:
         out[t] = "process"
-        reasons[t] = f"steady about {fp[t]['median']:.2f} while running, drops when stopped"
+        reasons[t] = f"steady about {med[t]:.2f} while running, drops when stopped"
     return out, reasons, fp
 
 
@@ -170,28 +185,38 @@ def classify_robot(df, tags):
             out[t], reasons[t] = "speed_override", f"jumps between {', '.join(f'{v:g}' for v in sorted(vals))}: a speed setting in %"
     over = next((t for t, n in out.items() if n == "speed_override"), None)
     left = [t for t in reals if t not in out]
-    # tool speed: the biggest value, and it falls whenever the override drops
-    if left:
-        t = max(left, key=lambda t: fp[t]["median"])
-        out[t], reasons[t] = "tcp_speed", f"around {fp[t]['median']:.0f} and drops with the speed setting"
-        left.remove(t)
-    # joints: the shoulder holds the most weight, then the elbow, the base, then the three wrist joints
-    order = ["j2_torque", "j3_torque", "j1_torque", "j4_torque", "j5_torque", "j6_torque"]
-    for name, t in zip(order, sorted(left, key=lambda t: -abs(fp[t]["median"]))):
-        out[t], reasons[t] = name, (f"about {fp[t]['median']:.0f} Nm, rises when the gripper holds a case; "
-                                    f"ranked by load (shoulder carries most)")
-    # the remaining on/off signals: running is mostly on; the safety zone is on exactly when the speed setting drops
+    # the remaining on/off signals: the safety zone is on exactly when the speed setting drops;
+    # running is the one that was on at the start of the shift
     rest = [t for t in bools if t != grip]
     if over is not None:
         zone = [t for t in rest if (df[t] == 1).any() and (df.loc[df[t] == 1, over] < df[over].max() - 1).mean() > 0.9]
         if zone:
             out[zone[0]], reasons[zone[0]] = "zone_occupied", "on exactly when the robot slows to collaborative speed"
             rest.remove(zone[0])
+    head = df.head(120)
+    rest.sort(key=lambda t: (head[t].mean(), fp[t]["share_ones"]), reverse=True)
+    if rest and head[rest[0]].mean() >= 0.5:
+        t = rest.pop(0)
+        out[t], reasons[t] = "running", f"on/off signal, on {fp[t]['share_ones']:.0%} of the time, on from the start"
+    never = [t for t in rest if fp[t]["max"] == fp[t]["min"]]
     for t in rest:
-        if fp[t]["share_ones"] >= 0.5:
-            out[t], reasons[t] = "running", f"on/off signal, on {fp[t]['share_ones']:.0%} of the time"
+        if len(never) > 1 and t in never:                # e.g. fault and safety zone before anyone walked in
+            out[t], reasons[t] = "unseen", "on/off signal that has not switched yet, so it can't be named"
         else:
             out[t], reasons[t] = "fault", f"on/off signal, on {fp[t]['share_ones']:.0%} of the time"
+    run = next((t for t in bools if out.get(t) == "running"), None)
+    on = df[run] > 0.5 if run is not None and (df[run] > 0.5).sum() >= 30 else pd.Series(True, index=df.index)
+    med = {t: float(df.loc[on, t].median()) for t in left}
+    # tool speed: the biggest value while working, and it falls whenever the override drops
+    if left:
+        t = max(left, key=lambda t: med[t])
+        out[t], reasons[t] = "tcp_speed", f"around {med[t]:.0f} while working and drops with the speed setting"
+        left.remove(t)
+    # joints: the shoulder holds the most weight, then the elbow, the base, then the three wrist joints
+    order = ["j2_torque", "j3_torque", "j1_torque", "j4_torque", "j5_torque", "j6_torque"]
+    for name, t in zip(order, sorted(left, key=lambda t: -abs(med[t]))):
+        out[t], reasons[t] = name, (f"about {med[t]:.0f} Nm, rises when the gripper holds a case; "
+                                    f"ranked by load (shoulder carries most)")
     return out, reasons, fp
 
 
@@ -254,7 +279,7 @@ def decode(data="data/stream.csv"):
             if sig == "process":
                 sig = {"filler": "fill_pressure", "capper": "cap_torque"}.get(m, "process")
             name, unit = NAMES.get(sig, ("Process value", ""))
-            conf = "low" if sig == "process" or m == "unknown" or mwhy[g].startswith("GUESS") else "high"
+            conf = "low" if sig in ("process", "unseen") or m == "unknown" or mwhy[g].startswith("GUESS") else "high"
             result[t] = {"machine": m, "signal": sig, "name": f"{MACHINE_NAMES.get(m, m)} {name.lower()}",
                          "unit": unit, "confidence": conf,
                          "reason": f"{reasons[t]}; machine: {mwhy[g]}"}

@@ -395,6 +395,7 @@ def summarise(translation):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")    # Windows consoles/pipes default to cp1252
     names = load_names()
     files = sys.argv[1:] or [os.path.join("data/plc_programs", f) for f in sorted(os.listdir("data/plc_programs"))]
     for path in files:

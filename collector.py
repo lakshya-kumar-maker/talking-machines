@@ -86,6 +86,7 @@ if __name__ == "__main__":
     ap.add_argument("--rate", type=float, default=100, help="reads per second")
     ap.add_argument("--test-write", action="store_true")
     a = ap.parse_args()
+    plc.exit_with_parent()
     if a.test_write:
         test_write(a.host, a.port)
     else:

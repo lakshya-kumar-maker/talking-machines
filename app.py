@@ -40,7 +40,8 @@ def line_process():
 def _spawn(key, args):
     """Start a helper process; its output goes to a log file so a crash can be shown on the page."""
     log = open(LOGS[key], "w", encoding="utf-8")
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
+               TM_PARENT_PID=str(os.getpid()))           # the helper exits if this dashboard dies
     line_process()[key] = subprocess.Popen([sys.executable] + args, stdout=log, stderr=subprocess.STDOUT, env=env)
     log.close()                                      # the child keeps its own handle
 
@@ -102,12 +103,12 @@ with st.sidebar:
     mode = st.radio("How Talking Machines reads the line", modes, index=modes.index(lp["mode"]),
                     help="PLC: the simulator acts as a PLC on Modbus TCP port 5020 and a collector reads it, "
                          "read-only, like in a real plant. File: the simulator writes the data file directly.")
-    if st.button("▶ Restart line from 09:00", use_container_width=True):
+    if st.button("▶ Restart line from 09:00", width="stretch"):
         lp["stopped"] = False
         st.session_state.pop("inject_log", None)
         start_line(speed, int(seed), mode)
         st.rerun()
-    if st.button("■ Stop line", use_container_width=True):
+    if st.button("■ Stop line", width="stretch"):
         lp["stopped"] = True
         stop_line()
     alive = lambda p: p is not None and p.poll() is None
@@ -163,7 +164,7 @@ with st.sidebar:
         st.caption("Start the line first (▶ Restart line).")
     elif _minute < INJECT_MIN and what in ("filler_wear", "glue_heater"):
         st.caption(f"Available from 09:{INJECT_MIN:02d}: the system is still learning what normal looks like.")
-    elif st.button("💥 Break it now", use_container_width=True, type="primary"):
+    elif st.button("💥 Break it now", width="stretch", type="primary"):
         st.session_state["inject_id"] = st.session_state.get("inject_id", 0) + 1
         import json
         with open("data/inject.json.tmp", "w", encoding="utf-8") as f:
@@ -246,7 +247,7 @@ def live():
                                    "Minutes": round(e["minutes"], 1), "Bottles lost": round(e["bottles"]),
                                    "Cost": line.rupees(e["rupees"]) + (" and rising" if e["ongoing"] else "")}
                                   for e in reversed(d["events"])])
-            st.dataframe(table, hide_index=True, use_container_width=True)
+            st.dataframe(table, hide_index=True, width="stretch")
         saved = [x for x in line.cost_text(d, warns).split(". ") if "could have been planned" in x]
         if saved:
             st.warning("💡 " + saved[0].strip().rstrip(".") + ".")
@@ -266,7 +267,7 @@ def live():
                 st.dataframe(pd.DataFrame([{"Signal": ch["signal"], "Normal": ch["normal"], "Now": ch["now"],
                                             "Unit": ch["unit"], "Change": f"{ch['change_pct']:+}%",
                                             "Since": f"{ch['since']:%H:%M}"} for ch in c["changed"]]),
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width="stretch")
             st.markdown(f"**Why:** {c['cause']}  \n**Do:** {c['action']}")
     with st.expander("All warnings, newest first"):
         for w in reversed(warns):
@@ -291,7 +292,7 @@ def live():
             color=alt.Color("Signal:N", sort=list(chart.columns),
                             legend=alt.Legend(orient="bottom", direction="vertical", title=None, labelLimit=0)),
         ).properties(height=280),
-        use_container_width=True)
+        width="stretch")
     if "speed" in sig:
         st.line_chart(recent[[sig["speed"]]].rename(columns={sig["speed"]: dec[sig["speed"]]["name"]}), height=160)
 
@@ -319,7 +320,7 @@ def tag_translator():
     low = int((table["Confidence"] == "low").sum())
     st.write(f"**{len(table)} signals decoded from how they behave** · {low} marked low confidence "
              f"· as of {df['timestamp'].iloc[-1]:%H:%M:%S}")
-    st.dataframe(table, use_container_width=True, hide_index=True, height=560)
+    st.dataframe(table, width="stretch", hide_index=True, height=560)
 
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")

@@ -255,6 +255,8 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5020)
     a = ap.parse_args()
+    import plc
+    plc.exit_with_parent()
     os.makedirs("data", exist_ok=True)
     start = datetime(2026, 11, 27, 9, 0, 0)
     out = writer = tags = cols = server = regmap = None
@@ -266,7 +268,6 @@ def main():
                 random.Random(a.seed).shuffle(cols)            # column/register order changes with the seed
                 write_answers(tags, a.seed, start)
                 if a.plc:
-                    import plc
                     kinds = {v["tag"]: v["kind"] for v in tags.values()}
                     regmap = plc.build_map(cols, kinds)
                     plc.save_map(regmap)
