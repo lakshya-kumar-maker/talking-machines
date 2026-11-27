@@ -25,12 +25,15 @@ def connect(host, port):
             time.sleep(1)
 
 
-def run(host, port, rate, out="data/stream.csv"):
-    while not os.path.exists("data/plc_map.json"):
+def _tags(regmap):
+    return [t for t, s in regmap.items() if not t.startswith("__") and not s.get("internal")]
+
+
+def run(host, port, rate, out="data/stream.csv", map_path="data/plc_map.json"):
+    while not os.path.exists(map_path):
         time.sleep(0.5)
-    regmap = plc.load_map()
-    tags = list(regmap)
-    size = plc.map_size(regmap)
+    regmap = plc.load_map(map_path)
+    tags = _tags(regmap)
     client = connect(host, port)
     print(f"connected to PLC {host}:{port} · reading {len(tags)} tags, read-only")
     f = writer = None
@@ -38,12 +41,12 @@ def run(host, port, rate, out="data/stream.csv"):
     try:
         while True:
             try:
-                regs = client.read_registers(0, size)
+                regs = plc.read_map(client, regmap)
             except (OSError, ConnectionError, IOError):
                 client.close()
                 client = connect(host, port)
-                regmap = plc.load_map()                        
-                tags, size = list(regmap), plc.map_size(regmap)
+                regmap = plc.load_map(map_path)               # a restarted PLC may have a new tag list
+                tags = _tags(regmap)
                 continue
             clock, values = plc.decode(regs, regmap)
             if last_clock is not None and clock < last_clock:  
@@ -71,9 +74,9 @@ def run(host, port, rate, out="data/stream.csv"):
         client.close()
 
 
-def test_write(host, port):
-    regmap = plc.load_map()
-    tag, spec = next(iter(regmap.items()))
+def test_write(host, port, map_path="data/plc_map.json"):
+    regmap = plc.load_map(map_path)
+    tag, spec = next((t, s) for t, s in regmap.items() if not t.startswith("__"))
     c = connect(host, port)
     print(f"trying to WRITE 1 to {tag} (register {spec['addr']})… the PLC says: {c.try_write(spec['addr'], 1)}")
     c.close()
@@ -85,9 +88,9 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=5020)
     ap.add_argument("--rate", type=float, default=100, help="reads per second")
     ap.add_argument("--test-write", action="store_true")
+    ap.add_argument("--map", default="data/plc_map.json", help="register map (OpenPLC: data/openplc/map.json)")
     a = ap.parse_args()
-    plc.exit_with_parent()
     if a.test_write:
-        test_write(a.host, a.port)
+        test_write(a.host, a.port, a.map)
     else:
-        run(a.host, a.port, a.rate)
+        run(a.host, a.port, a.rate, map_path=a.map)

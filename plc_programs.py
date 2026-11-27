@@ -62,6 +62,9 @@ END_IF;
 IF {labeller.glue_temp} < 150.0 THEN
     {labeller.fault} := TRUE;           (* glue too cold to stick *)
 END_IF;
+IF {labeller.fault} AND {labeller.glue_temp} >= 160.0 THEN
+    {labeller.fault} := FALSE;          (* back at working temperature, e.g. after a cold start *)
+END_IF;
 IF {filler.fault} OR {labeller.fault} THEN
     {labeller.running} := FALSE;
     {labeller.speed} := 0.0;
@@ -76,6 +79,7 @@ END_IF;
 {case_packer.case_count} := {case_packer.count} / 24;
 IF {filler.fault} THEN
     {case_packer.running} := FALSE;
+    {case_packer.speed} := 0.0;
 ELSIF NOT {capper.running} THEN
     {case_packer.speed} := 60.0;        (* starved *)
 ELSE

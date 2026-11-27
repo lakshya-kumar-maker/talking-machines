@@ -45,6 +45,19 @@ def _spawn(key, args):
     log.close()                                      # the child keeps its own handle
 
 
+OPENPLC_MAP = "data/openplc/map.json"
+OPENPLC_MAX_SPEED = 10      # OpenPLC's timers run in real time: faster plants make jams too short for its 2 s timer
+
+
+def openplc_seed():
+    try:
+        import json
+        with open(OPENPLC_MAP, encoding="utf-8") as f:
+            return json.load(f)["seed"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def start_line(speed, seed, mode):
     lp = line_process()
     stop_line()
@@ -53,7 +66,18 @@ def start_line(speed, seed, mode):
         if os.path.exists(f):
             os.remove(f)
     args = ["simulator.py", "--speed", str(speed), "--seed", str(seed), "--minutes", str(RUN_MINUTES)]
-    if mode.startswith("PLC"):
+    if mode.startswith("OpenPLC"):
+        # the real soft PLC runs our program; plant.py plays the machines, the collector reads the PLC
+        host, _, port = lp.get("openplc", "127.0.0.1:502").partition(":")
+        if not os.path.exists(OPENPLC_MAP):
+            import openplc_export
+            openplc_export.export(seed)
+        _spawn("proc", ["plant.py", "--host", host, "--port", port or "502", "--speed", str(min(speed, OPENPLC_MAX_SPEED)),
+                        "--minutes", str(RUN_MINUTES)])
+        _spawn("collector", ["collector.py", "--host", host, "--port", port or "502", "--map", OPENPLC_MAP,
+                             "--rate", "4"])
+        speed = min(speed, OPENPLC_MAX_SPEED)
+    elif mode.startswith("PLC"):
         _spawn("proc", args + ["--plc"])
         _spawn("collector", ["collector.py", "--rate", str(max(50, speed * 3))])
     else:
@@ -98,10 +122,28 @@ with st.sidebar:
     lp = line_process()
     speed = st.select_slider("Speed (simulated seconds per real second)", [5, 10, 20, 30, 60], value=lp["speed"])
     seed = st.number_input("Seed (changes tag names and noise)", value=lp["seed"], step=1)
-    modes = ["PLC (Modbus TCP)", "File only"]
+    modes = ["PLC (Modbus TCP)", "OpenPLC (real soft PLC)", "File only"]
     mode = st.radio("How Talking Machines reads the line", modes, index=modes.index(lp["mode"]),
                     help="PLC: the simulator acts as a PLC on Modbus TCP port 5020 and a collector reads it, "
-                         "read-only, like in a real plant. File: the simulator writes the data file directly.")
+                         "read-only, like in a real plant. OpenPLC: OpenPLC Runtime runs our PLC programs and "
+                         "plant.py plays the machines; see OPENPLC_SETUP.md. File: the simulator writes the "
+                         "data file directly.")
+    if mode.startswith("OpenPLC"):
+        lp["openplc"] = st.text_input("OpenPLC address (host:port)", value=lp.get("openplc", "127.0.0.1:502"))
+        exported = openplc_seed()
+        if exported is None:
+            st.caption("No OpenPLC program exported yet.")
+        elif exported != int(seed):
+            st.warning(f"OpenPLC runs the program exported for seed {exported}. Seed {int(seed)} has different "
+                       "tag names: export it and upload it to OpenPLC again, or set the seed back.")
+        if st.button("Export OpenPLC program for this seed", use_container_width=True):
+            import openplc_export
+            openplc_export.export(int(seed))
+            st.success(f"Wrote data/openplc/talking_machines.st for seed {int(seed)}. Upload it in OpenPLC "
+                       "(Programs → Upload Program) and press Start PLC, then ▶ Restart line.")
+        if speed > OPENPLC_MAX_SPEED:
+            st.caption(f"With OpenPLC the plant runs at {OPENPLC_MAX_SPEED}× at most: the PLC's timers count real "
+                       "seconds.")
     if st.button("▶ Restart line from 09:00", use_container_width=True):
         lp["stopped"] = False
         st.session_state.pop("inject_log", None)
@@ -111,10 +153,13 @@ with st.sidebar:
         lp["stopped"] = True
         stop_line()
     alive = lambda p: p is not None and p.poll() is None
-    running = alive(lp["proc"]) and (alive(lp["collector"]) or not lp["mode"].startswith("PLC"))
+    running = alive(lp["proc"]) and (alive(lp["collector"]) or lp["mode"] == "File only")
     st.caption(("🟢 running" if running else "⚪ stopped") + f" · {lp['speed']}× speed · seed {lp['seed']}")
     if lp["mode"].startswith("PLC"):
         st.caption("Source: PLC at 127.0.0.1:5020 · Modbus TCP · read-only (writes are refused)")
+    elif lp["mode"].startswith("OpenPLC"):
+        st.caption(f"Source: OpenPLC at {lp.get('openplc', '127.0.0.1:502')} · Modbus TCP · Talking Machines only "
+                   "reads; faults are raised by OpenPLC running our Structured Text")
     line.PRICE = float(st.number_input("Value of one bottle (₹)", min_value=1.0, value=line.PRICE, step=1.0,
                                        help="Used to turn lost output into rupees. Change it to your plant's figure."))
     st.caption(f"A full run is {RUN_MINUTES} simulated minutes: about "

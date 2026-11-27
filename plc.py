@@ -44,47 +44,63 @@ def encode(values, regmap, clock, size):
 
 
 def decode(regs, regmap):
+    """regs: register values by address (a list, or a dict address -> value).
+    Map types: bool, int32, float32 (two registers), int16 with a scale (value = register / scale; the usual
+    way PLCs send real numbers in one register), uint32 (two registers). The clock is in registers 0-1, or at
+    the address of the "__clock__" entry."""
     out = {}
     for t, spec in regmap.items():
+        if t.startswith("__") or spec.get("internal"):
+            continue
         a = spec["addr"]
         if spec["type"] == "bool":
-            out[t] = int(regs[a])
+            out[t] = int(regs[a] != 0)
         elif spec["type"] == "int32":
             out[t] = struct.unpack(">i", struct.pack(">HH", regs[a], regs[a + 1]))[0]
+        elif spec["type"] == "int16":
+            raw = struct.unpack(">h", struct.pack(">H", regs[a] & 0xFFFF))[0]
+            sc = spec.get("scale", 1)
+            out[t] = raw if sc == 1 else round(raw / sc, 4)
         else:
             out[t] = round(struct.unpack(">f", struct.pack(">HH", regs[a], regs[a + 1]))[0], 3)
-    clock = (regs[0] << 16) | regs[1]
+    c = regmap.get("__clock__", {"addr": 0})["addr"]
+    clock = (regs[c] << 16) | regs[c + 1]
     return clock, out
 
 
+def blocks(regmap, gap=8):
+    """The register ranges to read: used addresses grouped into blocks (OpenPLC keeps outputs at 0.. and
+    memory at 1024.., so reading everything in between would be wasteful)."""
+    used = set()
+    for t, spec in regmap.items():
+        n = 2 if spec["type"] in ("int32", "float32", "uint32") else 1
+        used.update(range(spec["addr"], spec["addr"] + n))
+    if "__clock__" not in regmap:
+        used.update((0, 1))
+    out, start, prev = [], None, None
+    for a in sorted(used):
+        if start is None:
+            start = prev = a
+        elif a - prev > gap:
+            out.append((start, prev - start + 1))
+            start = a
+        prev = a
+    if start is not None:
+        out.append((start, prev - start + 1))
+    return out
+
+
+def read_map(client, regmap):
+    """Read every register the map uses (only read requests). -> {address: value}"""
+    regs = {}
+    for start, n in blocks(regmap):
+        for i, v in enumerate(client.read_registers(start, n)):
+            regs[start + i] = v
+    return regs
+
+
 def map_size(regmap):
-    return max(s["addr"] + (1 if s["type"] == "bool" else 2) for s in regmap.values())
-
-
-# ── helpers started by the dashboard stop when it does ─────────────────────
-def exit_with_parent(env="TM_PARENT_PID", every=1.0):
-    """If the dashboard that started this process dies (closed terminal, crash), exit too, so an old
-    simulator never keeps port 5020 busy and blocks the next start. Does nothing when run by hand."""
-    pid = os.environ.get(env)
-    if not pid:
-        return
-    pid = int(pid)
-    if os.name == "nt":
-        import ctypes
-        k32 = ctypes.windll.kernel32
-        handle = k32.OpenProcess(0x00100000, False, pid)            # SYNCHRONIZE
-        if not handle:
-            os._exit(0)                                             # parent already gone
-        alive = lambda: k32.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT: still running
-    else:
-        alive = lambda: os.getppid() == pid
-
-    def watch():
-        import time
-        while alive():
-            time.sleep(every)
-        os._exit(0)
-    threading.Thread(target=watch, daemon=True).start()
+    return max(s["addr"] + (1 if s["type"] in ("bool", "int16") else 2) for s in regmap.values())
 
 
 # ── server: the simulated PLC ──────────────────────────────────────────────
@@ -201,4 +217,5 @@ def save_map(regmap, path="data/plc_map.json"):
 
 def load_map(path="data/plc_map.json"):
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        m = json.load(f)
+    return m.get("map", m)                       # data/openplc/map.json keeps the map under "map"

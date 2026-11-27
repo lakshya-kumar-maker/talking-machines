@@ -137,7 +137,12 @@ def classify_group(df, tags):
 
     # current: follows the speed closely while running
     if speed and left:
-        corr = {t: abs(df.loc[on, t].corr(df.loc[on, speed])) if on.sum() > 30 else 0 for t in left}
+        # while running; if the speed never changes while running (a PLC that reports its exact setpoint),
+        # use the whole run instead: the current drops when the machine stops
+        rows = on if on.sum() > 30 and df.loc[on, speed].std() > 1e-6 else pd.Series(True, index=df.index)
+        cand = [t for t in left if med[t] > 3] or left
+        with np.errstate(invalid="ignore", divide="ignore"):       # a constant signal has no correlation
+            corr = {t: abs(df.loc[rows, t].corr(df.loc[rows, speed])) for t in cand}
         corr = {t: (c if c == c else 0) for t, c in corr.items()}
         t = max(corr, key=corr.get)
         if med[t] > 3:
