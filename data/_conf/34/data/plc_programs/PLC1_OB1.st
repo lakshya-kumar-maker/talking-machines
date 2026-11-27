@@ -1,0 +1,11 @@
+IF B3:2/1 THEN
+    M1_RUN := FALSE;
+ELSE
+    M1_RUN := TRUE;
+END_IF;
+IF M1_RUN THEN
+    M1_SPD := 300.0;
+ELSE
+    M1_SPD := 0.0;
+END_IF;
+M1_LYR := M1_CNT / 120;

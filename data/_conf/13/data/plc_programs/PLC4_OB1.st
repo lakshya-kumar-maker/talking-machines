@@ -1,0 +1,12 @@
+IF M4_T_GLUE < 150.0 THEN
+    M4_FLT := TRUE;
+END_IF;
+IF B3:2/1 OR M4_FLT THEN
+    M4_RUN := FALSE;
+    M4_SPD := 0.0;
+ELSIF NOT M3_RUN THEN
+    M4_SPD := 60.0;
+ELSE
+    M4_RUN := TRUE;
+    M4_SPD := 300.0;
+END_IF;

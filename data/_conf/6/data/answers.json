@@ -1,0 +1,411 @@
+{
+ "tags": {
+  "M1_RUN": {
+   "machine": "depalletiser",
+   "signal": "running",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "legacy"
+  },
+  "M1_FLT": {
+   "machine": "depalletiser",
+   "signal": "fault",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "legacy"
+  },
+  "M1_SPD": {
+   "machine": "depalletiser",
+   "signal": "speed",
+   "kind": "real",
+   "unit": "bottles/min",
+   "vendor_style": "legacy"
+  },
+  "M1_CNT": {
+   "machine": "depalletiser",
+   "signal": "count",
+   "kind": "int",
+   "unit": "bottles",
+   "vendor_style": "legacy"
+  },
+  "M1_I_AMP": {
+   "machine": "depalletiser",
+   "signal": "motor_current",
+   "kind": "real",
+   "unit": "A",
+   "vendor_style": "legacy"
+  },
+  "M1_T_MOT": {
+   "machine": "depalletiser",
+   "signal": "motor_temp",
+   "kind": "real",
+   "unit": "\u00b0C",
+   "vendor_style": "legacy"
+  },
+  "M1_VIB": {
+   "machine": "depalletiser",
+   "signal": "vibration",
+   "kind": "real",
+   "unit": "mm/s",
+   "vendor_style": "legacy"
+  },
+  "M1_LYR": {
+   "machine": "depalletiser",
+   "signal": "layer_count",
+   "kind": "int",
+   "unit": "layers",
+   "vendor_style": "legacy"
+  },
+  "DB102.DBX0.0": {
+   "machine": "filler",
+   "signal": "running",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "siemens"
+  },
+  "DB102.DBX0.1": {
+   "machine": "filler",
+   "signal": "fault",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "siemens"
+  },
+  "DB102.DBD8": {
+   "machine": "filler",
+   "signal": "speed",
+   "kind": "real",
+   "unit": "bottles/min",
+   "vendor_style": "siemens"
+  },
+  "DB102.DBW6": {
+   "machine": "filler",
+   "signal": "count",
+   "kind": "int",
+   "unit": "bottles",
+   "vendor_style": "siemens"
+  },
+  "DB102.DBD16": {
+   "machine": "filler",
+   "signal": "motor_current",
+   "kind": "real",
+   "unit": "A",
+   "vendor_style": "siemens"
+  },
+  "DB102.DBD20": {
+   "machine": "filler",
+   "signal": "motor_temp",
+   "kind": "real",
+   "unit": "\u00b0C",
+   "vendor_style": "siemens"
+  },
+  "DB102.DBD24": {
+   "machine": "filler",
+   "signal": "vibration",
+   "kind": "real",
+   "unit": "mm/s",
+   "vendor_style": "siemens"
+  },
+  "DB102.DBD28": {
+   "machine": "filler",
+   "signal": "fill_pressure",
+   "kind": "real",
+   "unit": "bar",
+   "vendor_style": "siemens"
+  },
+  "B3:3/0": {
+   "machine": "capper",
+   "signal": "running",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "ab"
+  },
+  "B3:3/1": {
+   "machine": "capper",
+   "signal": "fault",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "ab"
+  },
+  "F8:32": {
+   "machine": "capper",
+   "signal": "speed",
+   "kind": "real",
+   "unit": "bottles/min",
+   "vendor_style": "ab"
+  },
+  "N7:33": {
+   "machine": "capper",
+   "signal": "count",
+   "kind": "int",
+   "unit": "bottles",
+   "vendor_style": "ab"
+  },
+  "F8:34": {
+   "machine": "capper",
+   "signal": "motor_current",
+   "kind": "real",
+   "unit": "A",
+   "vendor_style": "ab"
+  },
+  "F8:35": {
+   "machine": "capper",
+   "signal": "motor_temp",
+   "kind": "real",
+   "unit": "\u00b0C",
+   "vendor_style": "ab"
+  },
+  "F8:36": {
+   "machine": "capper",
+   "signal": "vibration",
+   "kind": "real",
+   "unit": "mm/s",
+   "vendor_style": "ab"
+  },
+  "F8:37": {
+   "machine": "capper",
+   "signal": "cap_torque",
+   "kind": "real",
+   "unit": "Nm",
+   "vendor_style": "ab"
+  },
+  "B3:4/0": {
+   "machine": "labeller",
+   "signal": "running",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "ab"
+  },
+  "B3:4/1": {
+   "machine": "labeller",
+   "signal": "fault",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "ab"
+  },
+  "F8:42": {
+   "machine": "labeller",
+   "signal": "speed",
+   "kind": "real",
+   "unit": "bottles/min",
+   "vendor_style": "ab"
+  },
+  "N7:43": {
+   "machine": "labeller",
+   "signal": "count",
+   "kind": "int",
+   "unit": "bottles",
+   "vendor_style": "ab"
+  },
+  "F8:44": {
+   "machine": "labeller",
+   "signal": "motor_current",
+   "kind": "real",
+   "unit": "A",
+   "vendor_style": "ab"
+  },
+  "F8:45": {
+   "machine": "labeller",
+   "signal": "motor_temp",
+   "kind": "real",
+   "unit": "\u00b0C",
+   "vendor_style": "ab"
+  },
+  "F8:46": {
+   "machine": "labeller",
+   "signal": "vibration",
+   "kind": "real",
+   "unit": "mm/s",
+   "vendor_style": "ab"
+  },
+  "F8:47": {
+   "machine": "labeller",
+   "signal": "glue_temp",
+   "kind": "real",
+   "unit": "\u00b0C",
+   "vendor_style": "ab"
+  },
+  "DB105.DBX0.0": {
+   "machine": "case_packer",
+   "signal": "running",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "siemens"
+  },
+  "DB105.DBX0.1": {
+   "machine": "case_packer",
+   "signal": "fault",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "siemens"
+  },
+  "DB105.DBD8": {
+   "machine": "case_packer",
+   "signal": "speed",
+   "kind": "real",
+   "unit": "bottles/min",
+   "vendor_style": "siemens"
+  },
+  "DB105.DBW6": {
+   "machine": "case_packer",
+   "signal": "count",
+   "kind": "int",
+   "unit": "bottles",
+   "vendor_style": "siemens"
+  },
+  "DB105.DBD16": {
+   "machine": "case_packer",
+   "signal": "motor_current",
+   "kind": "real",
+   "unit": "A",
+   "vendor_style": "siemens"
+  },
+  "DB105.DBD20": {
+   "machine": "case_packer",
+   "signal": "motor_temp",
+   "kind": "real",
+   "unit": "\u00b0C",
+   "vendor_style": "siemens"
+  },
+  "DB105.DBD24": {
+   "machine": "case_packer",
+   "signal": "vibration",
+   "kind": "real",
+   "unit": "mm/s",
+   "vendor_style": "siemens"
+  },
+  "DB105.DBW14": {
+   "machine": "case_packer",
+   "signal": "case_count",
+   "kind": "int",
+   "unit": "cases",
+   "vendor_style": "siemens"
+  },
+  "ROB1.DI1": {
+   "machine": "cobot",
+   "signal": "running",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "robot"
+  },
+  "ROB1.DI3": {
+   "machine": "cobot",
+   "signal": "fault",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "robot"
+  },
+  "ROB1.DI0": {
+   "machine": "cobot",
+   "signal": "gripper_closed",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "robot"
+  },
+  "ROB1.DI2": {
+   "machine": "cobot",
+   "signal": "zone_occupied",
+   "kind": "bool",
+   "unit": "",
+   "vendor_style": "robot"
+  },
+  "ROB1.CNT0": {
+   "machine": "cobot",
+   "signal": "cycle_count",
+   "kind": "int",
+   "unit": "cases",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI7": {
+   "machine": "cobot",
+   "signal": "tcp_speed",
+   "kind": "real",
+   "unit": "mm/s",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI0": {
+   "machine": "cobot",
+   "signal": "speed_override",
+   "kind": "real",
+   "unit": "%",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI5": {
+   "machine": "cobot",
+   "signal": "j1_torque",
+   "kind": "real",
+   "unit": "Nm",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI1": {
+   "machine": "cobot",
+   "signal": "j2_torque",
+   "kind": "real",
+   "unit": "Nm",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI2": {
+   "machine": "cobot",
+   "signal": "j3_torque",
+   "kind": "real",
+   "unit": "Nm",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI4": {
+   "machine": "cobot",
+   "signal": "j4_torque",
+   "kind": "real",
+   "unit": "Nm",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI3": {
+   "machine": "cobot",
+   "signal": "j5_torque",
+   "kind": "real",
+   "unit": "Nm",
+   "vendor_style": "robot"
+  },
+  "ROB1.AI6": {
+   "machine": "cobot",
+   "signal": "j6_torque",
+   "kind": "real",
+   "unit": "Nm",
+   "vendor_style": "robot"
+  }
+ },
+ "events": {
+  "capper_jams": [
+   "2026-11-27 09:11:00",
+   "2026-11-27 09:16:00"
+  ],
+  "filler_wear_starts": "2026-11-27 09:19:00",
+  "filler_fails": "2026-11-27 09:35:00",
+  "cobot_zone_visits": [
+   [
+    "2026-11-27 09:11:13",
+    "2026-11-27 09:12:19"
+   ],
+   [
+    "2026-11-27 09:18:02",
+    "2026-11-27 09:18:54"
+   ],
+   [
+    "2026-11-27 09:25:34",
+    "2026-11-27 09:26:37"
+   ]
+  ],
+  "disturbances": [
+   {
+    "kind": "heavy_batch",
+    "machine": "capper",
+    "start": "2026-11-27 09:15:00",
+    "end": "2026-11-27 09:21:00"
+   },
+   {
+    "kind": "bump",
+    "machine": "capper",
+    "start": "2026-11-27 09:17:01",
+    "end": "2026-11-27 09:17:50"
+   }
+  ]
+ }
+}

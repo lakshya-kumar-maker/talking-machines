@@ -1,0 +1,12 @@
+IF F8:47 < 150.0 THEN
+    B3:4/1 := TRUE;
+END_IF;
+IF M2_FLT OR B3:4/1 THEN
+    B3:4/0 := FALSE;
+    F8:42 := 0.0;
+ELSIF NOT B3:3/0 THEN
+    F8:42 := 60.0;
+ELSE
+    B3:4/0 := TRUE;
+    F8:42 := 300.0;
+END_IF;
