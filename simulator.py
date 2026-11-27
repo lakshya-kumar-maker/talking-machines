@@ -55,6 +55,36 @@ def timeline(seed):
     return jam, jams, wear, fail, zones
 
 
+def disturbances(seed):
+    """Harmless events that LOOK like trouble but aren't, so the alerts can be tested honestly:
+      heavy_batch  one machine draws ~14% more current for 4-7 min (a heavier product), nothing is wearing
+      bump         a short vibration spike on one machine (a forklift passing), 40-100 s
+      warm         the hall warms up: every motor runs up to 7 °C hotter from some point on
+    Uses its own random numbers, so the rest of the run is the same as without them."""
+    r = random.Random(seed * 31 + 7)
+    out = []
+    if r.random() < 0.6:
+        s0 = r.randint(10, 33) * 60
+        out.append({"kind": "heavy_batch", "machine": r.choice(MACHINES), "start": s0, "end": s0 + r.randint(4, 7) * 60})
+    if r.random() < 0.6:
+        s0 = r.randint(10, 38) * 60 + r.randint(0, 59)
+        out.append({"kind": "bump", "machine": r.choice(MACHINES), "start": s0, "end": s0 + r.randint(40, 100)})
+    if r.random() < 0.4:
+        s0 = r.randint(12, 30) * 60
+        out.append({"kind": "warm", "machine": "all", "start": s0, "end": 45 * 60})
+    return out
+
+
+def _dist(dist, kind, m, t):
+    """0..1: how strongly a disturbance of this kind acts on machine m at second t (30 s ramps)."""
+    for d in dist:
+        if d["kind"] == kind and d["machine"] in (m, "all") and d["start"] <= t < d["end"] + 30:
+            if kind == "warm":
+                return min(1.0, (t - d["start"]) / 480)          # warms up over 8 minutes and stays
+            return min(1.0, (t - d["start"]) / 30, max(0.0, (d["end"] + 30 - t) / 30))
+    return 0.0
+
+
 def make_tags(rng, seed):
     """Give every signal a cryptic name; each machine gets one vendor style, like a real mixed plant."""
     styles = ["siemens", "ab", "legacy"]
@@ -101,13 +131,14 @@ GLUE_DROP = 20 / 240        # °C per second once the glue heater fails (crosses
 VIB_TRIP, VIB_HOLD = 7.2, 10    # the filler's PLC rule (plc_programs.py): vibration above 7.2 mm/s for 10 s
 
 
-def simulate(minutes, seed, inject=None, events=None):
+def simulate(minutes, seed, inject=None, events=None, calm=False):
     """inject(t) -> list of fault names (keys of INJECTABLE) to start at second t; used for live demos.
     events: optional dict; gets "filler_trip" = the second the filler's PLC rule really tripped."""
     rng = random.Random(seed)
     tags = make_tags(rng, seed)
     JAM, JAMS, WEAR, FAIL, ZONES = timeline(seed)
     JAMS, ZONES = list(JAMS), list(ZONES)
+    DIST = [] if calm else disturbances(seed)
     glue_fail_from = labeller_failed_at = filler_tripped_at = None
     vib_over = 0
     st = {m: {"temp": 38.0, "count": 0.0, "cases": 0.0, "layers": 0.0} for m in MACHINES}
@@ -155,11 +186,12 @@ def simulate(minutes, seed, inject=None, events=None):
                 speed_target = 300.0
             speed = (speed_target + rng.gauss(0, 3)) if running else 0.0
             load = speed / 300.0
-            extra_i = 3.0 * wear if m == "filler" else 0.0
+            extra_i = (3.0 * wear if m == "filler" else 0.0) + 1.5 * _dist(DIST, "heavy_batch", m, t)
             current = (2.0 + 9.0 * load + extra_i + rng.gauss(0, 0.15)) if running else rng.gauss(0.3, 0.05)
-            temp_target = 35 + 25 * load + (28 * wear if m == "filler" else 0)
+            temp_target = 35 + 25 * load + (28 * wear if m == "filler" else 0) + 7 * _dist(DIST, "warm", m, t)
             s["temp"] += (temp_target - s["temp"]) / 240 + rng.gauss(0, 0.05)
-            vib = (1.4 + 0.6 * load + (5.4 * wear ** 1.5 if m == "filler" else 0) + abs(rng.gauss(0, 0.2))) \
+            vib = (1.4 + 0.6 * load + (5.4 * wear ** 1.5 if m == "filler" else 0) + abs(rng.gauss(0, 0.2))
+                   + 2.0 * _dist(DIST, "bump", m, t)) \
                 if running else abs(rng.gauss(0.1, 0.05))
             if m == "filler" and filler_tripped_at is None:           # the PLC's TON_VIB timer
                 vib_over = vib_over + 1 if vib > VIB_TRIP else 0
@@ -212,6 +244,9 @@ def simulate(minutes, seed, inject=None, events=None):
         yield t, row, tags
 
 
+CALM = False
+
+
 def write_answers(tags, seed, start, path="data/answers.json"):
     import plc_programs
     plc_programs.render(tags)                                   # the machines' PLC code, with this run's tags
@@ -222,7 +257,9 @@ def write_answers(tags, seed, start, path="data/answers.json"):
         json.dump({"tags": key, "events": {
             "capper_jams": [at(JAM[0]), at(JAM[1])],
             "filler_wear_starts": at(WEAR), "filler_fails": at(FAIL),
-            "cobot_zone_visits": [[at(s0), at(s0 + d)] for s0, d in ZONES]}}, f, indent=1)
+            "cobot_zone_visits": [[at(s0), at(s0 + d)] for s0, d in ZONES],
+            "disturbances": [] if CALM else [dict(d, start=at(d["start"]), end=at(d["end"])) for d in disturbances(seed)]}},
+            f, indent=1)
 
 
 class Injector:
@@ -269,6 +306,7 @@ def main():
     ap.add_argument("--plc", action="store_true", help="serve the values over Modbus TCP instead of a file")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5020)
+    ap.add_argument("--calm", action="store_true", help="no harmless disturbances (heavy batch, bump, warm hall)")
     a = ap.parse_args()
     os.makedirs("data", exist_ok=True)
     start = datetime(2026, 11, 27, 9, 0, 0)
@@ -276,7 +314,9 @@ def main():
     inject = None if a.fast else Injector(start)
     try:
         events, recorded = {}, False
-        for t, row, tags in simulate(a.minutes, a.seed, inject, events):
+        global CALM
+        CALM = a.calm
+        for t, row, tags in simulate(a.minutes, a.seed, inject, events, a.calm):
             if not recorded and "filler_trip" in events and os.path.exists("data/answers.json"):
                 recorded = True                                # the real moment the PLC rule tripped
                 with open("data/answers.json", encoding="utf-8") as f:

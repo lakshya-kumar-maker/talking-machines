@@ -1,0 +1,83 @@
+{
+ "features": [
+  "drift",
+  "forest",
+  "forecast",
+  "signals",
+  "vibration",
+  "current",
+  "temperature",
+  "heater",
+  "minutes",
+  "progress",
+  "others"
+ ],
+ "intercept": 2.399123564913054,
+ "coef": {
+  "drift": -0.9339715327184752,
+  "forest": 0.8889114612568936,
+  "forecast": 1.7922768762194594,
+  "signals": 0.2452154072416874,
+  "vibration": 0.6851689631098445,
+  "current": -0.5940985830837262,
+  "temperature": 0.16882302469508143,
+  "heater": 0.919035356381272,
+  "minutes": 0.36081889648100945,
+  "progress": 1.048122612313169,
+  "others": -1.1896032899037297
+ },
+ "mean": {
+  "drift": 0.8481308411214953,
+  "forest": 0.8785046728971962,
+  "forecast": 0.530373831775701,
+  "signals": 1.4813084112149533,
+  "vibration": 0.6285046728971962,
+  "current": 0.4462616822429907,
+  "temperature": 0.38317757009345793,
+  "heater": 0.02336448598130841,
+  "minutes": 3.7920950155763244,
+  "progress": 0.27154037593515334,
+  "others": 0.4672897196261682
+ },
+ "scale": {
+  "drift": 0.35931402466450196,
+  "forest": 0.3270843555142022,
+  "forecast": 0.49966063468344396,
+  "signals": 1.0478599439031984,
+  "vibration": 0.4837699411393909,
+  "current": 0.49768555362271794,
+  "temperature": 0.4867299442736493,
+  "heater": 0.15123500285790561,
+  "minutes": 3.1141341634779636,
+  "progress": 0.3112108159267557,
+  "others": 0.6356726804066523
+ },
+ "train_runs": 30,
+ "test_runs": 20,
+ "test_bands": [
+  {
+   "low": 90,
+   "high": 100,
+   "alerts": 157,
+   "real": 157
+  },
+  {
+   "low": 70,
+   "high": 89,
+   "alerts": 37,
+   "real": 29
+  },
+  {
+   "low": 50,
+   "high": 69,
+   "alerts": 13,
+   "real": 9
+  },
+  {
+   "low": 0,
+   "high": 49,
+   "alerts": 85,
+   "real": 9
+  }
+ ]
+}

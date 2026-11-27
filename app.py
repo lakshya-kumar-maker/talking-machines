@@ -307,7 +307,12 @@ def live():
     for c in cards:
         with st.container(border=True):
             badge = {"Critical": "🔴", "High": "🟠", "Medium": "🟡"}[c["severity"]]
-            st.markdown(f"**{badge} {c['title']}**  ·  {c['severity']} severity  ·  {c['confidence']} confidence")
+            conf = (f"**{c['confidence_pct']}%** confident" if "confidence_pct" in c else f"{c['confidence']} confidence")
+            st.markdown(f"**{badge} {c['title']}**  ·  {c['severity']} severity  ·  {conf}",
+                        help=("How sure we are this is a real developing fault, not a harmless look-alike "
+                              "(heavier batch, forklift bump, warm hall). " + c.get("confidence_note", "")).strip())
+            if c.get("confidence_note") and c["status"] != "FAULT":
+                st.caption("🎯 " + c["confidence_note"][0].upper() + c["confidence_note"][1:])
             if c["changed"]:
                 st.dataframe(pd.DataFrame([{"Signal": ch["signal"], "Normal": ch["normal"], "Now": ch["now"],
                                             "Unit": ch["unit"], "Change": f"{ch['change_pct']:+}%",

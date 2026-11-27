@@ -368,6 +368,24 @@ def forest_text(df, dec):
         for f in found) + "."
 
 
+RECENT = 120          # an alert stays up while the signal is abnormal, or was within the last 2 minutes
+
+
+def _episode(held, keep_history=False):
+    """(start of the current abnormal stretch, True) if the signal is abnormal now or was within RECENT s;
+    with keep_history (a machine in fault) the first stretch counts too. Else (None, False)."""
+    if not held.any():
+        return None, False
+    v = held.values
+    if keep_history:
+        return held.index[int(v.argmax())], True
+    if not v[-RECENT:].any():
+        return None, False                         # it went back to normal: the alert clears itself
+    last = len(v) - 1 - int(v[::-1].argmax())
+    before = (~v[:last]).nonzero()[0]
+    return held.index[before[-1] + 1 if len(before) else 0], True
+
+
 def alert_cards(df, dec, base=(3, 8), smooth=60):
     """One explained alert per machine: what changed, since when, how far from normal, likely cause, action.
     Severity = how serious it is; confidence = how sure we are it's real (how many signals agree, how long)."""
@@ -379,7 +397,7 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
     healthy = sm.iloc[base[0] * 60:base[1] * 60]
     mu, sd = healthy.mean(), healthy.std()
     sp, st = spans(df, dec), status(df, dec)
-    fz = {f["machine"]: f for f in forest(df, dec)[1]}
+    fz = {f["machine"]: f for f in forest(df, dec)[1] if f.get("active", True)}
     fc = {}
     for p in predictions(df, dec):
         fc.setdefault(p["machine"], p)
@@ -396,8 +414,8 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
             z = (sm[t] - mu[t]) / floor
             above = (z > 6) & (ts[sig["running"]] > 0.5) if "running" in sig else (z > 6)
             held = above.rolling(smooth).sum() >= smooth - 5
-            if held.any():
-                since = held.idxmax()
+            since, active = _episode(held, keep_history=row["fault"])
+            if active:
                 now_v = sm[t][held].iloc[-1]
                 changed.append({"signal": LABEL[s], "key": s, "since": since, "normal": round(mu[t], 2),
                                 "now": round(now_v, 2), "unit": dec[t]["unit"],
@@ -405,9 +423,10 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
         if "glue_temp" in sig:                  # a heater going cold is a problem even while the machine runs
             t = sig["glue_temp"]
             hs, hmu, held = _heater_drop(ts[t], base)
-            if held.any():
+            hsince, hactive = _episode(held, keep_history=row["fault"])
+            if hactive:
                 now_v = hs.iloc[-1]
-                changed.append({"signal": LABEL["glue_temp"], "key": "glue_temp", "since": held.idxmax(),
+                changed.append({"signal": LABEL["glue_temp"], "key": "glue_temp", "since": hsince,
                                 "normal": round(hmu, 2), "now": round(now_v, 2), "unit": dec[t]["unit"],
                                 "change_pct": round((now_v - hmu) / abs(hmu) * 100, 1), "z": 20.0})
         changed.sort(key=lambda c: c["since"])
@@ -468,12 +487,27 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
                       "first_seen": changed[0]["since"] if changed else (fz[m]["since"] if m in fz else None),
                       "forest": fz.get(m), "forecast": fc.get(m) if not row["fault"] else None,
                       "status": "FAULT" if row["fault"] else ("Running" if row["running"] else "Stopped")})
-    # knock-on effects: machines that slowed only because another machine had a fault
+    # measured confidence (confidence.py): how often alerts with this evidence were real in testing
+    try:
+        import confidence
+        for c in cards:
+            c["_now"] = ts.index[-1]
+        for c in cards:
+            pct = confidence.score(c, cards)
+            if pct is not None:
+                c["confidence_pct"] = pct
+                c["confidence"] = "certain" if c["status"] == "FAULT" else (
+                    "high" if pct >= 80 else "medium" if pct >= 50 else "low")
+                c["confidence_note"] = ("the fault light is on: this has happened" if c["status"] == "FAULT"
+                                        else confidence.band(pct))
+    except Exception:
+        pass                                          # keep the old high/medium/low if the model is missing
     return cards
 
 
 def explain_card(c):
-    lines = [f"{c['title']}  [{c['severity']} severity, {c['confidence']} confidence]"]
+    conf = f"{c['confidence_pct']}% confidence" if "confidence_pct" in c else f"{c['confidence']} confidence"
+    lines = [f"{c['title']}  [{c['severity']} severity, {conf}]"]
     for ch in c["changed"]:
         lines.append(f"  • {ch['signal']}: normal {ch['normal']} → now {ch['now']} {ch['unit']} "
                      f"({ch['change_pct']:+}%) since {ch['since']:%H:%M}")
@@ -668,22 +702,44 @@ def rule_answer(question, df, dec, warns):
             return (f"The {names[m].lower()} is in FAULT now" + (f" (since {since:%H:%M})." if since is not None else ".") +
                     (f" It was warned about first at {early[0][0]}: {early[0][1]}." if early else ""),
                     "signals: fault, vibration, motor current, motor temperature")
-        if drifting:
-            m = max(drifting, key=lambda m: len(drifting[m]))
-            steps = "; then ".join(f"{what} (since {t})" for t, what in drifting[m])
-            why = ("The glue heater is cooling down; below 150 °C its PLC program stops the labeller, so check the "
-                   "heater now." if "glue" in steps else
-                   "Vibration rising first and then the motor heating up is a typical sign of a wearing bearing, "
-                   "so check it before it fails.")
-            pred = prediction_text(df, dec, m)
-            if pred:
-                why += " " + pred
-            fz = {f["machine"]: f for f in forest(df, dec)[1]}.get(m)
-            if fz:
-                why += (f" The Isolation Forest, which looks at all its signals together, agrees: unusual since "
-                        f"{fz['since']:%H:%M}.")
-            return (f"The {names[m].lower()} needs attention: {steps}. {why}",
-                    f"signals: {names[m]} vibration, motor current, motor temperature")
+        cards = [c for c in alert_cards(df, dec) if c["status"] != "FAULT"]
+        keyof = {v: k for k, v in names.items()}
+        ranked = sorted(cards, key=lambda c: -c.get("confidence_pct", 50))
+        if ranked:
+            top = ranked[0]                                  # the alert we're most sure is a real fault
+            m = keyof[top["machine"]]
+            pct = top.get("confidence_pct")
+            if m in drifting:
+                steps = "; then ".join(f"{what} (since {t})" for t, what in drifting[m])
+            elif top["changed"]:
+                steps = "; ".join(f"{c['signal'].lower()} {c['change_pct']:+}% (since {c['since']:%H:%M})"
+                                  for c in top["changed"])
+            else:
+                steps = (f"its signals together look unusual since {top['forest']['since']:%H:%M}, mainly "
+                         f"{top['forest']['why']}" if top.get("forest") else "an early hint")
+            if pct is not None and pct < 50:
+                head = (f"Nothing is clearly failing. The most suspicious is the {names[m].lower()} ({steps}), "
+                        f"but confidence is low ({pct}%): it may be harmless, like a heavier batch or a bump.")
+            else:
+                why = ("The glue heater is cooling down; below 150 °C its PLC program stops the labeller, so check "
+                       "the heater now." if "glue" in steps else
+                       "Vibration rising first and then the motor heating up is a typical sign of a wearing "
+                       "bearing, so check it before it fails." if "vibration" in steps else
+                       top["cause"])
+                head = f"The {names[m].lower()} needs attention: {steps}. {why}"
+                pred = prediction_text(df, dec, m)
+                if pred:
+                    head += " " + pred
+                if top.get("forest") and top["changed"]:
+                    head += (f" The Isolation Forest, which looks at all its signals together, agrees: unusual "
+                             f"since {top['forest']['since']:%H:%M}.")
+                if pct is not None:
+                    head += f" Confidence it's a real developing fault: {pct}%."
+            doubt = [c for c in ranked[1:] if c.get("confidence_pct", 100) < 50]
+            if doubt and (pct is None or pct >= 50):
+                head += (" Also flagged but probably harmless (low confidence): " + ", ".join(
+                    f"{c['machine'].lower()} {c['confidence_pct']}%" for c in doubt) + ".")
+            return head, f"signals: {names[m]} vibration, motor current, motor temperature; confidence model"
         hints = forest(df, dec)[1]
         if hints:
             f = hints[0]

@@ -109,20 +109,30 @@ def score_line(df, dec):
     return out
 
 
-def findings(df, scores):
-    """[{machine, since, score, why}] for machines flagged now or earlier, oldest first."""
+def findings(df, scores, recent=120):
+    """[{machine, since, score, why, active}] for machines flagged now or earlier, oldest first.
+    active = still unusual now (or within the last 2 minutes); since = start of the current unusual stretch
+    if active, else of the first one."""
     out = []
     for m, s in scores.items():
-        if not s["flagged"].any():
+        fl = s["flagged"].fillna(False).values.astype(bool)
+        if not fl.any():
             continue
-        first = s.index[s["flagged"].values.argmax()]
+        active = bool(fl[-recent:].any())
+        if active:
+            last = len(fl) - 1 - int(fl[::-1].argmax())
+            before = (~fl[:last]).nonzero()[0]
+            first = s.index[before[-1] + 1 if len(before) else 0]
+        else:
+            first = s.index[int(fl.argmax())]
         window = s.loc[first:]
         reasons = window["top"].dropna()
         main = reasons.value_counts().index[0] if len(reasons) else None
         d = window.loc[window["top"] == main, "dir"].mode()
         out.append({"machine": m, "since": df["timestamp"][first], "score": float(window["score"].max()),
                     "now": float(s["score"].dropna().iloc[-1]) if s["score"].notna().any() else None,
-                    "why": f"{LABELS.get(main, main)} {d.iloc[0] if len(d) else ''}".strip() if main else ""})
+                    "why": f"{LABELS.get(main, main)} {d.iloc[0] if len(d) else ''}".strip() if main else "",
+                    "active": active})
     return sorted(out, key=lambda f: f["since"])
 
 
