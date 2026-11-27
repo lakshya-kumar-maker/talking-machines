@@ -1,0 +1,51 @@
+Why did the filler slow down?
+
+The filler’s motor temperature rose sharply (up 26.1 %) and its motor current increased (up 14 %) as reported at 09:28, which triggered a fault and a subsequent 100 % speed drop by 09:36. The earlier vibration increase (09:23) also indicated abnormal operation before the stop.
+
+Signals used: filler FAULT status; 09:28 warning – motor temperature up 26.1 %; motor current up 14 %; 09:23 warning – vibration up 21.9 %; 09:36 warning – speed down 100 %.
+(These signals show a possible explanation for the slowdown, but they do not independently prove the exact mechanical cause.)-Groq
+
+
+
+What happened to the labeller?
+
+The labeller stopped at 09:35 and is still stopped with a speed of 0 bottles/min and no fault reported. Its motor temperature has recently dropped (‑25.6 % at 09:41).
+
+Signals used: labeller status (STOPPED), stop time in history (09:35), warning about motor temperature down (09:41).
+(Priority: Find out why the machine stopped at 09:35 and why it has not restarted.
+
+AI recommendation: Generate a downtime alert and investigate the control signals around 09:35 to identify the root cause.) - Groq
+
+
+Is the capper OK?
+
+The capper is not OK – it is stopped, has been stopped multiple times, and recent warnings show large drops in torque, speed, vibration and motor temperature. Signals used: current status (STOPPED, speed 0 bottles/min, motor 0.21 A, 36.5 °C, vibration 0.14 mm/s), stop count, and warnings (09:10 torque ‑78.6 %, speed ‑76.7 %, vibration ‑74.8 %; 09:41 motor‑temperature ‑27.6 %). 
+(Priority debugging action
+
+Investigate the 09:10 event first. Check the motor drive, power supply, PLC fault history and mechanical connections to identify what caused the simultaneous signal changes.
+
+AI recommendation: Keep the capper under a high-priority maintenance alert until the cause is identified and normal operation is verified) - Groq
+
+
+Which machine needs attention?
+
+The filler is the machine that needs attention; it is currently in a FAULT state and has recent warnings of speed dropping to 0 % and motor temperature rising 26 %. These conditions indicate a critical issue that should be addressed immediately.
+
+Signals used: filler status = FAULT, filler speed down 100 % warning, filler motor temperature up 26.1 % warning.
+(Priority debugging action
+
+Investigate the motor overheating warning at 09:28 first, then examine the fault and shutdown events at 09:36. Check whether overheating, overload or a mechanical blockage caused the shutdown.
+
+AI recommendation: Keep the filler under a critical maintenance alert until the fault is resolved and normal operation is verified.) - Groq
+
+
+
+
+
+
+
+
+
+
+
+
