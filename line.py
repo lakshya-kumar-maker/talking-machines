@@ -107,34 +107,117 @@ def facts(df, dec, warns):
     return "\n".join(lines)
 
 
+def spans(df, dec):
+    """{machine: {"stopped": [(start, end)], "ran slow": [(start, end)]}} as timestamps."""
+    out = {}
+    for m in MACHINE_ORDER:
+        sig = by_machine(dec).get(m, {})
+        if "running" not in sig or "speed" not in sig:
+            continue
+        run, spd = df[sig["running"]] > 0.5, df[sig["speed"]]
+        normal = spd[run].median()
+        out[m] = {}
+        for label, mask in (("stopped", ~run), ("ran slow", run & (spd < 0.7 * normal))):
+            st_ = df.index[mask & ~mask.shift(fill_value=False)]
+            en_ = df.index[mask & ~mask.shift(-1, fill_value=False)]
+            out[m][label] = [(df["timestamp"][a], df["timestamp"][b]) for a, b in zip(st_, en_) if b - a >= 4]
+    return out
+
+
+def _overlaps(a, b):
+    return a[0] <= b[1] and b[0] <= a[1]
+
+
+def rule_answer(question, df, dec, warns):
+    """A plain-language answer worked out from the data itself, for when no AI service is reachable."""
+    q = question.lower()
+    names = decoder.MACHINE_NAMES
+    asked = next((m for m in MACHINE_ORDER if names[m].lower() in q or m.replace("_", " ") in q), None)
+    sp, st = spans(df, dec), status(df, dec)
+
+    if asked and any(w in q for w in ("slow", "stop", "why", "down", "happen")):
+        mine = sp.get(asked, {})
+        trouble = sorted(mine.get("ran slow", []) + mine.get("stopped", []))
+        if not trouble:
+            return f"The {names[asked].lower()} hasn't slowed down or stopped so far.", "signals: speed, running"
+        faults = {m: by_machine(dec)[m]["fault"] for m in MACHINE_ORDER if "fault" in by_machine(dec).get(m, {})}
+        ts = df.set_index("timestamp")
+        causes = {}
+        for t in trouble:                       # whose fault light was on during this slowdown?
+            win = ts.loc[t[0]:t[1]]
+            who = next((m for m in MACHINE_ORDER if m in faults and win[faults[m]].max() > 0), None)
+            causes.setdefault(who, []).append(t)
+        parts = []
+        for who, ts_ in causes.items():
+            when = ", ".join(f"{t[0]:%H:%M}" for t in ts_[:4]) + (" …" if len(ts_) > 4 else "")
+            n = f"{len(ts_)} time{'s' if len(ts_) > 1 else ''}"
+            if who == asked:
+                own = [w for w in warns if names[asked] in w and " up " in w]
+                parts.append(f"{n} ({when}) because of its own fault"
+                             + (f", warned about first at {own[0].split()[0]} ({own[0][7:]})" if own else ""))
+            elif who:
+                rel = "after" if MACHINE_ORDER.index(who) > MACHINE_ORDER.index(asked) else "before"
+                effect = "couldn't pass bottles on" if rel == "after" else "had no bottles coming in"
+                parts.append(f"{n} ({when}) because the {names[who].lower()}, which comes {rel} it on the line, "
+                             f"had a fault, so it {effect}")
+            else:
+                parts.append(f"{n} ({when}) with no fault anywhere, so the cause isn't clear from the data")
+        return (f"The {names[asked].lower()} slowed or stopped " + "; and ".join(parts) + ".",
+                f"signals: {names[asked]} speed and running, fault flags of every machine")
+
+    if any(w in q for w in ("attention", "fail", "wrong", "problem", "risk", "worry", "check")):
+        drift = [w for w in warns if " up " in w]
+        faults = st[st["fault"]]["machine"].tolist()
+        if faults:
+            return (f"{', '.join(faults)} is in FAULT now." +
+                    (f" It was warned about first at {drift[0].split()[0]}: {drift[0][7:]}." if drift else ""),
+                    "signals: fault, vibration, motor current, motor temperature")
+        if drift:
+            return (f"Keep an eye on what the latest warning names: {drift[-1][7:]} (since {drift[-1].split()[0]}). "
+                    "A rising vibration or temperature like this usually comes before a breakdown.",
+                    "signals: vibration, motor current, motor temperature")
+        return "Nothing needs attention: no machine is drifting away from normal.", "signals: all"
+
+    if asked:
+        r = st[st["machine"] == names[asked]].iloc[0]
+        state = "in FAULT" if r["fault"] else ("running" if r["running"] else "stopped")
+        return (f"The {names[asked].lower()} is {state}: {r['speed']} bottles/min, {r['current_A']} A, "
+                f"{r['temp_C']} °C, vibration {r['vibration']} mm/s. It has stopped {r['stops']} times so far.",
+                "signals: running, fault, speed, motor current, motor temperature, vibration")
+    return ("I can answer questions about a machine (filler, capper…), why it slowed down, or what needs "
+            "attention.", "")
+
+
 def ask(question, df, dec, warns):
-    """Answer a plant question from the data. Groq first, Gemini second, a plain summary if both fail."""
+    """Answer a plant question from the data. Groq first, Gemini second, our own rules if both fail."""
     context = facts(df, dec, warns)
     prompt = ("You are Talking Machines, an assistant for a bottling-line maintenance engineer. "
               "Answer ONLY from the facts below, in 2-3 short sentences, then list the signals you used "
               "as 'Signals used: ...'. If the facts don't answer it, say so.\n\n"
               f"FACTS:\n{context}\n\nQUESTION: {question}")
+    errors = []
     try:
         from dotenv import load_dotenv
         load_dotenv()
-    except Exception:
-        pass
+    except Exception as e:
+        errors.append(f"dotenv: {e}")
     try:
         from groq import Groq
         r = Groq(api_key=os.environ["GROQ_API_KEY"]).chat.completions.create(
             model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
             messages=[{"role": "user", "content": prompt}], timeout=20)
         return r.choices[0].message.content.strip(), "Groq"
-    except Exception:
-        pass
+    except Exception as e:
+        errors.append(f"Groq: {type(e).__name__}: {str(e)[:150]}")
     try:
         from google import genai
         r = genai.Client(api_key=os.environ["GEMINI_API_KEY"]).models.generate_content(
             model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"), contents=prompt)
         return r.text.strip(), "Gemini"
-    except Exception:
-        pass
-    return "I can't reach the AI right now, so here are the raw facts:\n\n" + context, "offline"
+    except Exception as e:
+        errors.append(f"Gemini: {type(e).__name__}: {str(e)[:150]}")
+    text, used = rule_answer(question, df, dec, warns)
+    return text + (f"\n\n_{used}_" if used else ""), "offline rules  ·  " + "  |  ".join(errors)
 
 
 if __name__ == "__main__":
