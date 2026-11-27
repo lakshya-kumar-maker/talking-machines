@@ -52,7 +52,8 @@ MACHINE_NAMES = {
 
 
 # ── 1. fingerprint: how each signal behaves ────────────────────────────────
-def fingerprint(s):
+def fingerprint(s: pd.Series) -> dict:
+    """Return simple statistics describing how one signal behaves."""
     v = s.astype(float)
     d = v.diff().dropna()
     uniq = set(np.unique(v.round(6)))
@@ -93,7 +94,8 @@ def address_group(tag):
 
 
 # ── 3. name signals inside one machine from their behaviour ───────────────
-def classify_group(df, tags):
+def classify_group(df: pd.DataFrame, tags: list[str]) -> tuple[dict, dict, dict]:
+    """Return (signal name per tag, reason per tag, fingerprints) for one machine's group of tags."""
     fp = {t: fingerprint(df[t]) for t in tags}
     out, reasons = {}, {}
     bools = [t for t in tags if fp[t]["bool"]]
@@ -185,7 +187,8 @@ def classify_group(df, tags):
 
 
 # ── 3b. a robot arm looks different: many joint signals that swing in a repeating cycle ───
-def looks_like_robot(df, tags):
+def looks_like_robot(df: pd.DataFrame, tags: list[str]) -> bool:
+    """Return True if this group of tags behaves like a robot arm (many joint values and a gripper)."""
     fp = {t: fingerprint(df[t]) for t in tags}
     bools = [t for t in tags if fp[t]["bool"]]
     reals = [t for t in tags if not fp[t]["bool"] and not fp[t]["counter"]]
@@ -193,7 +196,8 @@ def looks_like_robot(df, tags):
     return len(reals) >= 6 and any(f >= 4 for f in flips.values())  # a gripper opening and closing
 
 
-def classify_robot(df, tags):
+def classify_robot(df: pd.DataFrame, tags: list[str]) -> tuple[dict, dict, dict]:
+    """Return (signal name per tag, reason per tag, fingerprints) for the robot arm's tags."""
     fp = {t: fingerprint(df[t]) for t in tags}
     out, reasons = {}, {}
     bools = [t for t in tags if fp[t]["bool"]]
@@ -252,7 +256,8 @@ def classify_robot(df, tags):
 
 
 # ── 4. which machine is which, from how the line behaves ───────────────────
-def identify_machines(df, groups, signals):
+def identify_machines(df: pd.DataFrame, groups: dict, signals: dict) -> tuple[dict, dict]:
+    """Return (machine per group, reason per group): which group of tags is which machine."""
     ident, why = {}, {}
 
     def has(g, name):
@@ -363,7 +368,8 @@ def llm_check(result, fps):
     return result
 
 
-def score(result, answers="data/answers.json"):
+def score(result: dict, answers: str = "data/answers.json") -> tuple[int, int]:
+    """Print how many tags were decoded correctly against the answer key; return (correct, total)."""
     with open(answers, encoding="utf-8") as f:
         key = json.load(f)["tags"]
     ok = [

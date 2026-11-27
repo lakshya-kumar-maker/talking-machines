@@ -18,6 +18,7 @@ import line
 PATH = "data/stream.csv"
 MIN_ROWS = 180  # the decoder needs ~3 simulated minutes before names mean anything
 RUN_MINUTES = 45
+CHART_WINDOW_S = 15 * 60  # the live charts show the last 15 simulated minutes
 REFRESH = 3  # seconds between live updates
 
 st.set_page_config(page_title="Talking Machines", page_icon="🏭", layout="wide")
@@ -50,10 +51,12 @@ def _spawn(key, args):
 
 
 OPENPLC_MAP = "data/openplc/map.json"
+OPENPLC_DEFAULT = "127.0.0.1:502"  # where OpenPLC Runtime listens unless the sidebar says otherwise
 OPENPLC_MAX_SPEED = 10  # OpenPLC's timers run in real time: faster plants make jams too short for its 2 s timer
 
 
 def openplc_seed():
+    """Seed the exported OpenPLC program was built for, or None if none is exported."""
     try:
         import json
 
@@ -64,6 +67,7 @@ def openplc_seed():
 
 
 def start_line(speed, seed, mode):
+    """(Re)start the simulated line from 09:00 in the chosen mode, clearing the old run's files."""
     lp = line_process()
     stop_line()
     os.makedirs("data", exist_ok=True)
@@ -73,7 +77,7 @@ def start_line(speed, seed, mode):
     args = ["simulator.py", "--speed", str(speed), "--seed", str(seed), "--minutes", str(RUN_MINUTES)]
     if mode.startswith("OpenPLC"):
         # the real soft PLC runs our program; plant.py plays the machines, the collector reads the PLC
-        host, _, port = lp.get("openplc", "127.0.0.1:502").partition(":")
+        host, _, port = lp.get("openplc", OPENPLC_DEFAULT).partition(":")
         if not os.path.exists(OPENPLC_MAP):
             import openplc_export
 
@@ -106,6 +110,7 @@ def start_line(speed, seed, mode):
 
 
 def stop_line():
+    """Stop the simulator/plant and the collector, if they are running."""
     lp = line_process()
     for key in ("collector", "proc"):
         p = lp.get(key)
@@ -152,7 +157,7 @@ with st.sidebar:
         "data file directly.",
     )
     if mode.startswith("OpenPLC"):
-        lp["openplc"] = st.text_input("OpenPLC address (host:port)", value=lp.get("openplc", "127.0.0.1:502"))
+        lp["openplc"] = st.text_input("OpenPLC address (host:port)", value=lp.get("openplc", OPENPLC_DEFAULT))
         exported = openplc_seed()
         if exported is None:
             st.caption("No OpenPLC program exported yet.")
@@ -188,7 +193,7 @@ with st.sidebar:
         st.caption("Source: PLC at 127.0.0.1:5020 · Modbus TCP · read-only (writes are refused)")
     elif lp["mode"].startswith("OpenPLC"):
         st.caption(
-            f"Source: OpenPLC at {lp.get('openplc', '127.0.0.1:502')} · Modbus TCP · Talking Machines only "
+            f"Source: OpenPLC at {lp.get('openplc', OPENPLC_DEFAULT)} · Modbus TCP · Talking Machines only "
             "reads; faults are raised by OpenPLC running our Structured Text"
         )
     line.PRICE = float(
@@ -212,12 +217,14 @@ st.caption("Bottling line · read-only: it watches the machines and never contro
 # ── reading the data ───────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, max_entries=3)
 def snapshot(bucket):
+    """Load the data file and decode it; `bucket` changes every REFRESH seconds to force a reload."""
     df, dec = line.load(PATH)
     warns = line.warning_lines(df, dec) if len(df) >= MIN_ROWS else []
     return df, dec, warns
 
 
 def current():
+    """Return (df, decoded tags, warnings) for the line right now, or None while there is no data."""
     if not os.path.exists(PATH):
         return None
     try:
@@ -269,12 +276,14 @@ with st.sidebar:
 
 
 def line_anomaly_flag():
+    """Return the Isolation Forest score above which a machine counts as unusual."""
     import anomaly
 
     return anomaly.FLAG
 
 
 def clock(df):
+    """Draw the line-time metric and the shift progress bar."""
     now = df["timestamp"].iloc[-1]
     start = df["timestamp"].iloc[0]
     done = (now - start).total_seconds() / (RUN_MINUTES * 60)
@@ -294,6 +303,7 @@ tab_live, tab_work, tab_tags, tab_plc, tab_map, tab_ask = st.tabs(
 
 @st.fragment(run_every=f"{REFRESH}s")
 def live():
+    """Draw the Live line tab: machine cards, forecasts, downtime cost, alerts, forest and charts."""
     for name, tail in crashed():
         st.error(f"The {name} stopped with an error. Last lines of its log:")
         st.code(tail or "(empty)", language=None)
@@ -359,7 +369,7 @@ def live():
                 f"**{names[p['machine']]} predicted to trip at about {p['at']:%H:%M}** "
                 f"(in ~{left:.0f} min · likely between {p['low_at']:%H:%M} and {p['high_at']:%H:%M})"
             )
-            hist = df[["timestamp", p["tag"]]].tail(15 * 60).copy()
+            hist = df[["timestamp", p["tag"]]].tail(CHART_WINDOW_S).copy()
             hist["value"] = hist[p["tag"]].rolling(60, min_periods=1).mean()
             hist["Line"] = "Measured (1-min average)"
             fut = prediction.curve(p)
@@ -496,7 +506,7 @@ def live():
         )
         names = line.decoder.MACHINE_NAMES
         recent = pd.DataFrame({names[m]: s_["score"] for m, s_ in scores.items()}).assign(timestamp=df["timestamp"])
-        recent = recent.tail(15 * 60).melt("timestamp", var_name="Machine", value_name="Score").dropna()
+        recent = recent.tail(CHART_WINDOW_S).melt("timestamp", var_name="Machine", value_name="Score").dropna()
         base = (
             alt.Chart(recent)
             .mark_line()
@@ -537,7 +547,7 @@ def live():
     wanted = [s for s in ("motor_current", "motor_temp", "vibration") if s in sig] or [
         s for s in ("j2_torque", "j3_torque", "j1_torque") if s in sig
     ]
-    recent = df.tail(15 * 60).set_index("timestamp")
+    recent = df.tail(CHART_WINDOW_S).set_index("timestamp")
 
     def short(name):  # "Cobot joint 1 (base) torque" -> "Joint 1 (base) torque"
         return name[len(pick) :].strip().capitalize() if name.lower().startswith(pick.lower() + " ") else name
@@ -572,6 +582,7 @@ TAB_REFRESH = 10  # the side tabs update by themselves every few seconds
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")
 def tag_translator():
+    """Draw the Tag Translator tab: every decoded tag with its meaning and latest value."""
     data = current()
     if data is None or len(data[0]) < MIN_ROWS:
         n = 0 if data is None else len(data[0])
@@ -606,6 +617,7 @@ def tag_translator():
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")
 def plc_logic():
+    """Draw the PLC Logic tab: each PLC program translated rule by rule into English."""
     try:
         import translator
     except Exception as e:
@@ -659,6 +671,7 @@ def plc_logic():
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")
 def line_map():
+    """Draw the Line Map tab: which machine stops or slows which, from data and PLC code."""
     data = current()
     if data is None or len(data[0]) < MIN_ROWS:
         n = 0 if data is None else len(data[0])
@@ -719,6 +732,7 @@ def line_map():
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")
 def work_tab():
+    """Draw the Work Orders tab and the work-order / shift-report downloads."""
     data = current()
     if data is None or len(data[0]) < MIN_ROWS:
         st.info("Work orders appear once the line has been watched for about 3 simulated minutes.")

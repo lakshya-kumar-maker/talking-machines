@@ -157,7 +157,8 @@ def curve(p, step_s=15):
     return pd.DataFrame({"timestamp": [p["now"] + pd.Timedelta(minutes=float(x)) for x in xs], "value": ys})
 
 
-def describe(p, names):
+def describe(p: dict, names: dict) -> str:
+    """Return a forecast as one plain-English sentence."""
     m = names.get(p["machine"], p["machine"])
     word = "above" if p["op"] in (">", ">=") else "below"
     hold = f" for {p['hold_s']:g} s" if p["hold_s"] else ""

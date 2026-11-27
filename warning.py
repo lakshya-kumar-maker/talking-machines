@@ -12,6 +12,7 @@ import pandas as pd
 
 # ── Part 1: failure model on AI4I 2020 ─────────────────────────────────────
 def train_ai4i(path="data/ai4i2020.csv"):
+    """Train and evaluate a failure classifier on the AI4I 2020 dataset; print the results."""
     import joblib
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.metrics import classification_report, confusion_matrix

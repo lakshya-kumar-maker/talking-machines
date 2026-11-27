@@ -37,10 +37,12 @@ class Program:
         self.vars, self.timers, self.scale = {}, {}, time_scale
 
     def scan(self, dt):
+        """Run every rule once (one PLC scan) with `dt` real seconds elapsed."""
         for r in self.rules:
             self.run(r, dt)
 
     def run(self, s, dt):
+        """Execute one parsed statement."""
         k = s[0]
         if k == "set":
             self.vars[s[1]] = self.ev(s[2])
@@ -67,6 +69,7 @@ class Program:
         return int(m.group(1)) * {"MS": 0.001, "S": 1, "M": 60, "H": 3600}[m.group(2).upper()]
 
     def ev(self, n):
+        """Return the value of a parsed expression."""
         k = n[0]
         if k == "num":
             return n[1]
@@ -143,6 +146,7 @@ class SoftPLC:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def loop(self, cycle=0.1):
+        """Scan forever: inputs from registers, run the program, outputs to registers."""
         last = time.time()
         while True:
             now = time.time()

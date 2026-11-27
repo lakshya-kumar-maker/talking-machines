@@ -1,3 +1,5 @@
+"""Quick check that the Gemini and Groq API keys in .env work: asks each model to say hi."""
+
 import os
 
 from dotenv import load_dotenv

@@ -18,6 +18,7 @@ START = datetime(2026, 11, 27, 9, 0, 0)
 
 
 def connect(host, port):
+    """Return a PLCClient connected to host:port, retrying every second until the PLC answers."""
     while True:
         try:
             return plc.PLCClient(host, port)
@@ -31,6 +32,7 @@ def _tags(regmap):
 
 
 def run(host, port, rate, out="data/stream.csv", map_path="data/plc_map.json"):
+    """Poll the PLC (read-only) at `rate` and append decoded rows to the CSV `out`; runs until stopped."""
     while not os.path.exists(map_path):
         time.sleep(0.5)
     regmap = plc.load_map(map_path)
@@ -76,6 +78,7 @@ def run(host, port, rate, out="data/stream.csv", map_path="data/plc_map.json"):
 
 
 def test_write(host, port, map_path="data/plc_map.json"):
+    """Try one write to the PLC and print its answer (it should be refused)."""
     regmap = plc.load_map(map_path)
     tag, spec = next((t, s) for t, s in regmap.items() if not t.startswith("__"))
     c = connect(host, port)

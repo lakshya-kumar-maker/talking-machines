@@ -160,7 +160,8 @@ def build(df, dec):
     return out
 
 
-def describe(e, names):
+def describe(e: dict, names: dict) -> str:
+    """Return one dependency edge as a plain-English sentence."""
     a, b = names.get(e["source"], e["source"]), names.get(e["target"], e["target"])
     parts = [f"{a} → {b}: {e['effect']} it"]
     if e["data"]:

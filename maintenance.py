@@ -227,7 +227,8 @@ def plan(cards, line_cost_per_min, now):
     return sorted(orders, key=lambda o: -o["priority"])
 
 
-def summary(o, rupees):
+def summary(o: dict, rupees) -> str:
+    """Return a one-paragraph summary of a work order (what, when, why it pays to do it now)."""
     head = {"N": "Do now", "B": "Do first", "W": "Check when passing"}.get(o["when"][0], "Plan")
     conf = f", {o['confidence']}% confident" if o["confidence"] is not None and not o["fault"] else ""
     if o["fault"]:
@@ -260,6 +261,7 @@ def _e(x):
 
 
 def work_order_html(orders, now, rupees, plant="Bottling line 1"):
+    """Return printable HTML for the work orders."""
     parts = [
         f"<!doctype html><meta charset='utf-8'><title>Work orders {now:%H:%M}</title><style>{CSS}</style>",
         f"<h1>Maintenance work orders</h1><div class='meta'>{_e(plant)} · created by Talking Machines at "
@@ -302,6 +304,7 @@ def work_order_html(orders, now, rupees, plant="Bottling line 1"):
 def shift_report_html(
     df, cards, orders, cost, events, warns, rupees, names, preds=(), forest_found=(), plant="Bottling line 1"
 ):
+    """Return printable HTML for the shift report."""
     now, start = df["timestamp"].iloc[-1], df["timestamp"].iloc[0]
     out = [
         f"<!doctype html><meta charset='utf-8'><title>Shift report {now:%H:%M}</title><style>{CSS}</style>",

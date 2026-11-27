@@ -42,7 +42,8 @@ FEATURES = [
 DATASET = "data/confidence_dataset.csv"
 
 
-def features(card, cards):
+def features(card: dict, cards: list[dict]) -> dict:
+    """Return the model's input features for one alert card, given all current cards."""
     keys = [c["key"] for c in card["changed"]]
     others = sum(1 for c in cards if c is not card and c["status"] != "FAULT")
     now = card.get("_now")
@@ -65,7 +66,8 @@ def features(card, cards):
 _model = None
 
 
-def load():
+def load() -> dict:
+    """Return the trained confidence model (cached), or {} if the model file is missing."""
     global _model
     if _model is None:
         here = os.path.dirname(os.path.abspath(__file__))
@@ -178,6 +180,7 @@ def _run(seed):
 
 
 def build(seeds=range(1, 51)):
+    """Simulate every seed in parallel, save the alert snapshots to DATASET and return them."""
     import multiprocessing as mp
 
     here = os.getcwd()
@@ -201,6 +204,7 @@ def _run_in(arg):
 
 
 def train(train_seeds=range(1, 31), test_seeds=range(31, 51)):
+    """Fit the logistic-regression confidence model, save it to MODEL and return the scored test set."""
     from sklearn.linear_model import LogisticRegression
 
     df = pd.read_csv(DATASET)

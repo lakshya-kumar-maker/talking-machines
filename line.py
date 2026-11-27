@@ -31,7 +31,8 @@ def by_machine(dec):
     return out
 
 
-def speed_unit(m):
+def speed_unit(m: str) -> str:
+    """Return the unit of a machine's speed signal."""
     return "mm/s" if m == "cobot" else "bottles/min"
 
 
@@ -76,7 +77,8 @@ def _heater_drop(series, base=(3, 8), smooth=30):
     return sm, mu, held
 
 
-def heater_warnings(df, dec):
+def heater_warnings(df: pd.DataFrame, dec: dict) -> list[str]:
+    """Return warning lines for glue heaters whose temperature has dropped and stayed down."""
     out = []
     for t, r in dec.items():
         if r["signal"] != "glue_temp" or len(df) < 8 * 60:
@@ -88,7 +90,8 @@ def heater_warnings(df, dec):
     return out
 
 
-def warning_lines(path, dec, window_s=180, top=3):
+def warning_lines(path, dec: dict, window_s: int = 180, top: int = 3) -> list[str]:
+    """Return all early-warning lines (signal drift and heater drops), sorted by time."""
     lines = _drift_lines(path, dec, window_s, top)
     try:
         df = pd.read_csv(SNAP if os.path.exists(SNAP) else path, parse_dates=["timestamp"])
@@ -382,7 +385,8 @@ def predictions(df, dec):
     return _PRED[key]
 
 
-def prediction_text(df, dec, machine=None):
+def prediction_text(df: pd.DataFrame, dec: dict, machine: str | None = None) -> str:
+    """Return the time-to-failure forecasts (for one machine, or all) as sentences."""
     import prediction
 
     found = [p for p in predictions(df, dec) if machine in (None, p["machine"])]
@@ -410,14 +414,16 @@ def dependencies(df, dec):
     return _DEPS[key]
 
 
-def dependency_text(df, dec, machine=None):
+def dependency_text(df: pd.DataFrame, dec: dict, machine: str | None = None) -> str:
+    """Return the machine dependencies (involving one machine, or all) as sentences."""
     import dependency
 
     edges = [e for e in dependencies(df, dec) if machine in (None, e["source"], e["target"])]
     return " ".join(dependency.describe(e, decoder.MACHINE_NAMES) + "." for e in edges)
 
 
-def line_cost_per_min(df, dec):
+def line_cost_per_min(df: pd.DataFrame, dec: dict) -> float:
+    """Return what one minute of a stopped line costs, in rupees."""
     d = downtime(df, dec, PRICE)
     return round(d["rated"], -1) * PRICE if d else 300 * PRICE
 
@@ -430,7 +436,8 @@ def work_orders(df, dec, cards=None):
     return maintenance.plan(cards, line_cost_per_min(df, dec), df["timestamp"].iloc[-1])
 
 
-def forest_text(df, dec):
+def forest_text(df: pd.DataFrame, dec: dict) -> str:
+    """Return the Isolation Forest's findings as one sentence."""
     _, found = forest(df, dec)
     names = decoder.MACHINE_NAMES
     if not found:
@@ -621,7 +628,8 @@ def alert_cards(df, dec, base=(3, 8), smooth=60):
     return cards
 
 
-def explain_card(c):
+def explain_card(c: dict) -> str:
+    """Return an alert card as indented plain text."""
     conf = f"{c['confidence_pct']}% confidence" if "confidence_pct" in c else f"{c['confidence']} confidence"
     lines = [f"{c['title']}  [{c['severity']} severity, {conf}]"]
     for ch in c["changed"]:
@@ -667,7 +675,8 @@ def program_rules(dec):
         return {}
 
 
-def trip_rule(machine, dec):
+def trip_rule(machine: str, dec: dict):
+    """Return the PLC fault rule for a machine (from translator.fault_rules), or None."""
     try:
         import translator
 

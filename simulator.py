@@ -318,6 +318,7 @@ CALM = False
 
 
 def write_answers(tags, seed, start, path="data/answers.json"):
+    """Write the answer key (data/answers.json) and this run's PLC programs."""
     import plc_programs
 
     plc_programs.render(tags)  # the machines' PLC code, with this run's tags
@@ -381,6 +382,7 @@ class Injector:
 
 
 def main():
+    """Command-line entry point: run the simulated line to a file or as a Modbus TCP PLC."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--speed", type=float, default=60, help="simulated seconds per real second")
     ap.add_argument("--minutes", type=int, default=45)

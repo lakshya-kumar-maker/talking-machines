@@ -60,7 +60,8 @@ class FieldIO:
             buf += chunk
         return buf
 
-    def read(self, addr, n):
+    def read(self, addr: int, n: int) -> list[int]:
+        """Read `n` holding registers starting at `addr`."""
         out = []
         while n > 0:
             k = min(n, 125)
@@ -70,28 +71,33 @@ class FieldIO:
         return out
 
     def write(self, addr, values):
+        """Write the values to holding registers starting at `addr`."""
         while values:
             part, values = values[:120], values[120:]
             self._ask(struct.pack(">BHHB", 16, addr, len(part), 2 * len(part)) + struct.pack(f">{len(part)}H", *part))
             addr += len(part)
 
     def close(self):
+        """Close the connection."""
         self.sock.close()
 
 
-def to_reg(value, spec):
+def to_reg(value, spec: dict) -> int:
+    """Return a value as a scaled, clipped 16-bit register."""
     if spec["type"] == "bool":
         return 1 if value else 0
     v = int(round(value * spec["scale"]))
     return max(-32768, min(32767, v)) & 0xFFFF
 
 
-def from_reg(raw, spec):
+def from_reg(raw: int, spec: dict) -> bool | float:
+    """Return a 16-bit register as its engineering value (bool, or raw / scale)."""
     v = struct.unpack(">h", struct.pack(">H", raw & 0xFFFF))[0]
     return bool(v) if spec["type"] == "bool" else v / spec["scale"]
 
 
 def run(host, port, speed, minutes, map_path, calm=False):
+    """Play the machines against a real PLC: write field inputs, read its outputs, every simulated second."""
     with open(map_path, encoding="utf-8") as f:
         doc = json.load(f)
     seed, regmap = doc["seed"], doc["map"]

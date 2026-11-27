@@ -28,7 +28,8 @@ def build_map(tags, kinds, start=10):
     return m
 
 
-def encode(values, regmap, clock, size):
+def encode(values: dict, regmap: dict, clock: int, size: int) -> list[int]:
+    """Return the register list for one set of values (clock in registers 0-1)."""
     regs = [0] * size
     regs[0], regs[1] = (clock >> 16) & 0xFFFF, clock & 0xFFFF
     for t, spec in regmap.items():
@@ -100,7 +101,8 @@ def read_map(client, regmap):
     return regs
 
 
-def map_size(regmap):
+def map_size(regmap: dict) -> int:
+    """Return how many registers the map needs."""
     return max(s["addr"] + (1 if s["type"] in ("bool", "int16") else 2) for s in regmap.values())
 
 
@@ -142,10 +144,12 @@ class PLCServer:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def update(self, regs):
+        """Replace the served registers with a new snapshot."""
         with self.lock:
             self.regs[: len(regs)] = regs
 
     def close(self):
+        """Stop the server."""
         self.server.shutdown()
         self.server.server_close()
 
@@ -188,7 +192,8 @@ class PLCClient:
             raise ConnectionError("PLC closed the connection mid-reply")
         return body
 
-    def read_registers(self, addr, qty):
+    def read_registers(self, addr: int, qty: int) -> list[int]:
+        """Read `qty` holding registers from `addr` (function 03), in chunks the protocol allows."""
         out = []
         while qty > 0:
             n = min(qty, MAX_REGS)
@@ -205,6 +210,7 @@ class PLCClient:
         return "refused (read-only)" if resp[0] & 0x80 else "accepted"
 
     def close(self):
+        """Close the connection."""
         self.sock.close()
 
 
@@ -216,7 +222,8 @@ def save_map(regmap, path="data/plc_map.json"):
     os.replace(tmp, path)  # atomic: the collector never sees a half-written map
 
 
-def load_map(path="data/plc_map.json"):
+def load_map(path: str = "data/plc_map.json") -> dict:
+    """Return the register map from a JSON file (plain or OpenPLC's {'map': ...} form)."""
     with open(path, encoding="utf-8") as f:
         m = json.load(f)
     return m.get("map", m)  # data/openplc/map.json keeps the map under "map"

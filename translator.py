@@ -28,7 +28,8 @@ TOKEN = re.compile(
 KEYWORDS = {"IF", "THEN", "ELSIF", "ELSE", "END_IF", "AND", "OR", "NOT", "TRUE", "FALSE", "MOD"}
 
 
-def tokenize(src):
+def tokenize(src: str) -> list[tuple[str, str]]:
+    """Return the Structured Text source as a list of (kind, value) tokens."""
     out, pos = [], 0
     while pos < len(src):
         m = TOKEN.match(src, pos)
@@ -51,9 +52,11 @@ class Parser:
         self.t, self.i = tokens, 0
 
     def peek(self, k=0):
+        """Return the token `k` places ahead without consuming it."""
         return self.t[self.i + k] if self.i + k < len(self.t) else ("eof", "")
 
     def take(self, val=None):
+        """Consume and return the next token, checking it equals `val` if given."""
         tok = self.peek()
         if val is not None and tok[1] != val:
             raise SyntaxError(f"expected {val!r} but found {tok[1]!r}")
@@ -61,18 +64,21 @@ class Parser:
         return tok
 
     def program(self):
+        """Parse statements until the end of the source."""
         body = []
         while self.peek()[0] != "eof":
             body.append(self.statement())
         return body
 
     def block(self, *stops):
+        """Parse statements until one of the `stops` keywords."""
         body = []
         while self.peek()[1] not in stops:
             body.append(self.statement())
         return body
 
     def statement(self):
+        """Parse one statement: IF, a function-block call, or an assignment."""
         kind, val = self.peek()
         if val == "IF":
             self.take("IF")
@@ -107,6 +113,7 @@ class Parser:
         return ("set", target, value)
 
     def expr(self):
+        """Parse an OR expression."""
         node = self.and_()
         while self.peek()[1] == "OR":
             self.take()
@@ -114,6 +121,7 @@ class Parser:
         return node
 
     def and_(self):
+        """Parse an AND expression."""
         node = self.not_()
         while self.peek()[1] == "AND":
             self.take()
@@ -121,12 +129,14 @@ class Parser:
         return node
 
     def not_(self):
+        """Parse a NOT expression."""
         if self.peek()[1] == "NOT":
             self.take()
             return ("not", self.not_())
         return self.cmp()
 
     def cmp(self):
+        """Parse a comparison."""
         node = self.sum()
         if self.peek()[1] in ("<", ">", "<=", ">=", "=", "<>"):
             op = self.take()[1]
@@ -134,6 +144,7 @@ class Parser:
         return node
 
     def sum(self):
+        """Parse addition and subtraction."""
         node = self.term()
         while self.peek()[1] in ("+", "-"):
             op = self.take()[1]
@@ -141,6 +152,7 @@ class Parser:
         return node
 
     def term(self):
+        """Parse multiplication, division and MOD."""
         node = self.atom()
         while self.peek()[1] in ("*", "/", "MOD"):
             op = self.take()[1]
@@ -148,6 +160,7 @@ class Parser:
         return node
 
     def atom(self):
+        """Parse a number, time, boolean, tag or parenthesised expression."""
         kind, val = self.take()
         if val == "(":
             node = self.expr()
@@ -178,14 +191,16 @@ ACTION = {  # what writing TRUE / FALSE to it means
 }
 
 
-def duration(t):
+def duration(t: str) -> str:
+    """Return an IEC time literal (T#10S) in words (10 seconds)."""
     m = re.match(r"T#(\d+)(MS|S|M|H)", t, re.I)
     n, unit = int(m.group(1)), m.group(2).upper()
     word = {"MS": "millisecond", "S": "second", "M": "minute", "H": "hour"}[unit]
     return f"{n} {word}{'s' if n != 1 else ''}"
 
 
-def fmt(x):
+def fmt(x: float) -> str:
+    """Return a number without trailing zeros."""
     return f"{x:g}"
 
 
@@ -196,12 +211,14 @@ class English:
         self.unknown = set()
 
     def who(self, tag):
+        """Return 'the <machine>' a tag belongs to, or None if the tag isn't decoded."""
         r = self.names.get(tag)
         if not r:
             return None
         return "the " + {"case_packer": "case packer"}.get(r["machine"], r["machine"])
 
     def thing(self, tag):
+        """Return a tag's decoded name in a sentence ('the filler vibration')."""
         r = self.names.get(tag)
         if not r:
             self.unknown.add(tag)
@@ -209,11 +226,13 @@ class English:
         return "the " + r["name"][0].lower() + r["name"][1:]
 
     def unit(self, node):
+        """Return ' <unit>' for a tag node, or ''."""
         if node[0] == "tag" and node[1] in self.names and self.names[node[1]].get("unit") not in ("", None):
             return " " + self.names[node[1]]["unit"]
         return ""
 
     def value(self, node, unit=""):
+        """Return a value node in words."""
         k = node[0]
         if k == "num":
             return fmt(node[1]) + unit
@@ -232,6 +251,7 @@ class English:
         return self.cond(node)
 
     def cond(self, node, negate=False):
+        """Return a condition node in words, negated if asked."""
         k = node[0]
         if k == "not":
             return self.cond(node[1], not negate)
@@ -271,6 +291,7 @@ class English:
         return self.value(node)
 
     def statement(self, s, depth=0):
+        """Return one parsed statement as a list of English sentences."""
         k = s[0]
         if k == "call":
             name, args = s[1], s[2]
@@ -294,12 +315,14 @@ class English:
         return []
 
     def flat(self, body):
+        """Return a block's statements as lower-case clauses to join with ';'."""
         parts = []
         for s in body:
             parts += [p.rstrip(".") for p in self.statement(s)]
         return [p[0].lower() + p[1:] if p else p for p in parts]
 
     def action(self, target, value):
+        """Return an assignment in words ('Stop the capper', 'Set ... to ...')."""
         r = self.names.get(target)
         if r and r["signal"] in ACTION and value[0] == "bool":
             on, off = ACTION[r["signal"]]
@@ -312,7 +335,8 @@ class English:
 
 
 # ── 4. public API ──────────────────────────────────────────────────────────
-def load_names(path="data/decoded.json"):
+def load_names(path: str = "data/decoded.json") -> dict:
+    """Return the decoded tag names from the decoder's JSON file, or {} if it isn't there."""
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
@@ -361,14 +385,16 @@ def which_machine(rules, names):
     return max(count, key=count.get) if count else None
 
 
-def translate(src, names):
+def translate(src: str, names: dict) -> dict:
+    """Return {'machine', 'rules': [{'code', 'english'}], 'unknown'} for one PLC program."""
     rules = split_rules(src)
     en = English(names)
     out = [{"code": code, "english": " ".join(en.statement(rule))} for code, rule in rules]
     return {"machine": which_machine(rules, names), "rules": out, "unknown": sorted(en.unknown)}
 
 
-def translate_all(folder="data/plc_programs", names=None):
+def translate_all(folder: str = "data/plc_programs", names: dict | None = None) -> dict:
+    """Return translate() for every .st file in `folder`, keyed by file name."""
     names = names if names is not None else load_names()
     result = {}
     for f in sorted(os.listdir(folder)):
