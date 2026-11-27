@@ -281,6 +281,7 @@ LABEL = {"vibration": "Vibration", "motor_current": "Motor current", "motor_temp
 
 
 _FOREST = {}
+FOREST_ERROR = None
 
 
 def forest(df, dec):
@@ -293,8 +294,11 @@ def forest(df, dec):
             scores = anomaly.score_line(df, dec)
             _FOREST.clear()
             _FOREST[key] = (scores, anomaly.findings(df, scores))
-        except Exception:
+        except Exception as e:                            # shown on the dashboard instead of failing silently
+            global FOREST_ERROR
+            FOREST_ERROR = f"{type(e).__name__}: {e}"
             return {}, []
+    FOREST_ERROR = None
     return _FOREST[key]
 
 

@@ -284,8 +284,13 @@ def live():
 
     # second opinion: an Isolation Forest looks at each machine's signals together
     scores, found = line.forest(df, dec)
+    st.subheader("Second opinion: Isolation Forest")
+    if line.FOREST_ERROR:
+        st.error(f"The Isolation Forest couldn't run: {line.FOREST_ERROR}. Check that anomaly.py is in the "
+                 "project folder and scikit-learn is installed (pip install scikit-learn).")
+    elif not scores:
+        st.info("The Isolation Forest starts scoring after 09:08, once it has learned what normal looks like.")
     if scores:
-        st.subheader("Second opinion: Isolation Forest")
         st.caption("Learns what each machine's signals look like together while healthy (09:03–09:08), then scores "
                    "every second: 0 = normal, 1 = unlike anything seen while healthy. It is not scored while a "
                    f"machine is stopped or slowed by another one. Above {line_anomaly_flag()} for 30 s = unusual.")
