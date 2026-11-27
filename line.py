@@ -123,6 +123,7 @@ def facts(df, dec, warns):
     ev = events(df, dec)
     lines.append("History: " + ("; ".join(ev) if ev else "no stops or slowdowns"))
     lines.append("Warnings so far: " + ("; ".join(warns) if warns else "none"))
+    lines.append(cost_text(downtime(df, dec, PRICE), warns))
     for f, t in program_rules(dec).items():
         if t["machine"]:
             lines.append(f"PLC program {f} ({decoder.MACHINE_NAMES[t['machine']]}): "
@@ -145,6 +146,92 @@ def spans(df, dec):
             en_ = df.index[mask & ~mask.shift(-1, fill_value=False)]
             out[m][label] = [(df["timestamp"][a], df["timestamp"][b]) for a, b in zip(st_, en_) if b - a >= 4]
     return out
+
+
+PRICE = 10.0           # default value of one bottle in ₹ (changeable in the dashboard sidebar)
+
+
+def rupees(x):
+    """₹ in Indian grouping: 1,23,456"""
+    n = int(round(x))
+    s = str(abs(n))
+    if len(s) > 3:
+        head, tail = s[:-3], s[-3:]
+        parts = []
+        while len(head) > 2:
+            parts.insert(0, head[-2:])
+            head = head[:-2]
+        s = ",".join(([head] if head else []) + parts) + "," + tail
+    return ("-" if n < 0 else "") + "₹" + s
+
+
+def downtime(df, dec, price=PRICE):
+    """Output lost at the end of the line (case packer), and whose fault caused it, second by second.
+    Lost bottles = rated speed minus actual speed. The cause is the machine whose fault flag was on,
+    checked in line order (the first faulty machine is the root cause)."""
+    sig = by_machine(dec)
+    out = sig.get("case_packer", {})
+    if "speed" not in out or len(df) < 60:
+        return None
+    spd = df[out["speed"]].astype(float)
+    rated = round(float(spd[spd > 0.5 * spd.max()].median()))          # normal running speed, ~300/min
+    short = (rated - spd).clip(lower=0)
+    short[spd >= 0.95 * rated] = 0                                     # ignore normal noise
+    lost = short / 60                                                  # bottles lost in each second
+    cause = pd.Series("other", index=df.index)
+    for m in reversed([m for m in MACHINE_ORDER if m != "cobot"]):     # first machine in line order wins
+        f = sig.get(m, {}).get("fault")
+        if f:
+            cause[df[f] > 0.5] = m
+    cause[lost <= 0] = ""
+    by, events = {}, []
+    for m in cause[cause != ""].unique():
+        mask = cause == m
+        b = float(lost[mask].sum())
+        by[m] = {"bottles": b, "rupees": b * price, "minutes": int(mask.sum()) / 60}
+    # stoppages as separate events (a gap of up to 5 s still counts as the same event)
+    cur, start, last = None, None, None
+    for i in df.index[cause != ""]:
+        c = cause[i]
+        if cur is not None and (c != cur or i - last > 5):
+            events.append((cur, start, last))
+            start = i
+        elif cur is None:
+            start = i
+        cur, last = c, i
+    if cur is not None:
+        events.append((cur, start, last))
+    ev = []
+    for c, a, b in events:
+        bottles = float(lost[a:b + 1].sum())
+        if bottles < 5:
+            continue
+        ev.append({"cause": c, "start": df["timestamp"][a], "end": df["timestamp"][b],
+                   "minutes": (b - a + 1) / 60, "bottles": bottles, "rupees": bottles * price,
+                   "ongoing": b >= df.index[-1] - 1})
+    total = float(lost.sum())
+    return {"rated": rated, "price": price, "bottles": total, "rupees": total * price,
+            "by_cause": dict(sorted(by.items(), key=lambda kv: -kv[1]["bottles"])), "events": ev}
+
+
+def cost_text(d, warns=None):
+    """One plain sentence about lost output, for the dashboard, Ask the Line and the AI prompt."""
+    names = decoder.MACHINE_NAMES
+    if not d or d["bottles"] < 5:
+        return "No output lost so far: the line has run at full speed."
+    parts = [f"the {names.get(m, m).lower() if m != 'other' else 'unexplained slowdowns'} "
+             f"{rupees(v['rupees'])} ({v['bottles']:,.0f} bottles, {v['minutes']:.0f} min)"
+             for m, v in d["by_cause"].items()]
+    text = (f"Lost output so far: {d['bottles']:,.0f} bottles ≈ {rupees(d['rupees'])} "
+            f"(at {rupees(d['price'])} per bottle, rated {d['rated']:.0f} bottles/min). By cause: " + "; ".join(parts) + ".")
+    drifting = _drifting(warns or [])
+    for e in d["events"]:
+        early = drifting.get(e["cause"])
+        if e["ongoing"] and early:
+            text += (f" The {names[e['cause']].lower()} stop since {e['start']:%H:%M} has cost {rupees(e['rupees'])} so far "
+                     f"and keeps costing {rupees(round(d['rated'], -1) * d['price'])} per minute; it was warned about at "
+                     f"{early[0][0]}, so the repair could have been planned before it failed.")
+    return text
 
 
 def _overlaps(a, b):
@@ -336,6 +423,9 @@ def rule_answer(question, df, dec, warns):
             f, t = mine
             return (f"The {names[asked].lower()}'s PLC program ({f}) says: " + " ".join(r["english"] for r in t["rules"]),
                     f"source: {f}, translated with the decoded tag names")
+
+    if any(w in q for w in ("cost", "lost", "loss", "money", "rupee", "₹", "how much", "downtime", "production")):
+        return cost_text(downtime(df, dec, PRICE), warns), "signals: case packer speed (line output), fault flags of every machine"
 
     drifting = _drifting(warns)
     faults_now = [m for m in MACHINE_ORDER if st.loc[MACHINE_ORDER.index(m), "fault"]]

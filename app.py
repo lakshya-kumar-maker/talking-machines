@@ -114,6 +114,8 @@ with st.sidebar:
     st.caption(("🟢 running" if running else "⚪ stopped") + f" · {lp['speed']}× speed · seed {lp['seed']}")
     if lp["mode"].startswith("PLC"):
         st.caption("Source: PLC at 127.0.0.1:5020 · Modbus TCP · read-only (writes are refused)")
+    line.PRICE = float(st.number_input("Value of one bottle (₹)", min_value=1.0, value=line.PRICE, step=1.0,
+                                       help="Used to turn lost output into rupees. Change it to your plant's figure."))
     st.caption(f"A full run is {RUN_MINUTES} simulated minutes: about "
                f"{RUN_MINUTES * 60 / lp['speed'] / 60:.1f} real minutes at this speed.")
 
@@ -193,6 +195,30 @@ def live():
                            + ("🧍 person in safety zone" if r["zone"] else "safety zone clear"))
             else:
                 st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
+
+    # what the stoppages have cost so far
+    d = line.downtime(df, dec, line.PRICE)
+    if d:
+        st.subheader("Cost of downtime")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Lost today", line.rupees(d["rupees"]))
+        c2.metric("Bottles not made", f"{d['bottles']:,.0f}")
+        mins = sum(v["minutes"] for v in d["by_cause"].values())
+        c3.metric("Time below full speed", f"{mins:.0f} min")
+        if d["events"]:
+            names = line.decoder.MACHINE_NAMES
+            table = pd.DataFrame([{"From": f"{e['start']:%H:%M}", "Cause": names.get(e["cause"], "Unexplained")
+                                   + (" fault" if e["cause"] in names else ""),
+                                   "Minutes": round(e["minutes"], 1), "Bottles lost": round(e["bottles"]),
+                                   "Cost": line.rupees(e["rupees"]) + (" and rising" if e["ongoing"] else "")}
+                                  for e in reversed(d["events"])])
+            st.dataframe(table, hide_index=True, use_container_width=True)
+        saved = [x for x in line.cost_text(d, warns).split(". ") if "could have been planned" in x]
+        if saved:
+            st.warning("💡 " + saved[0].strip().rstrip(".") + ".")
+        st.caption(f"Lost bottles = normal speed ({d['rated']:.0f}/min) minus actual output at the case packer, "
+                   f"each second; the cause is the first machine on the line whose fault light was on. "
+                   f"Valued at {line.rupees(d['price'])} per bottle (change it in the sidebar).")
 
     st.subheader("Why this alert")
     cards = line.alert_cards(df, dec)
@@ -319,7 +345,7 @@ with tab_plc:
 with tab_ask:
     st.write("Ask about the line in plain words. Answers come only from the live data and list the signals used.")
     st.caption("Try: *Why did the filler slow down?* · *Which machine needs attention?* · *Why did the line stop?* "
-               "· *Why did the cobot slow down?* · *Is the capper OK?* · *When does the filler's program trip?*")
+               "· *Why did the cobot slow down?* · *Is the capper OK?* · *How much has downtime cost?* · *When does the filler's program trip?*")
     if "chat" not in st.session_state:
         st.session_state.chat = []
     with st.form("ask", clear_on_submit=True):
