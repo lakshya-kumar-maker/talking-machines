@@ -59,12 +59,23 @@ def live():
                 st.success(f"**{r['machine']}**  \nRunning")
             st.metric("Speed (bottles/min)", f"{r['speed']:.0f}" if r["speed"] is not None else "–")
             st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
-    st.subheader("Early warnings")
-    if warns:
-        for w in reversed(warns[-4:]):
-            st.error("⚠ " + w)
-    else:
-        st.success("No warnings: every machine looks normal.")
+    st.subheader("Why this alert")
+    cards = line.alert_cards(df, dec)
+    if not cards:
+        st.success("No alerts: every machine looks normal.")
+    for c in cards:
+        with st.container(border=True):
+            badge = {"Critical": "🔴", "High": "🟠", "Medium": "🟡"}[c["severity"]]
+            st.markdown(f"**{badge} {c['title']}**  ·  {c['severity']} severity  ·  {c['confidence']} confidence")
+            if c["changed"]:
+                st.dataframe(pd.DataFrame([{"Signal": ch["signal"], "Normal": ch["normal"], "Now": ch["now"],
+                                            "Unit": ch["unit"], "Change": f"{ch['change_pct']:+}%",
+                                            "Since": f"{ch['since']:%H:%M}"} for ch in c["changed"]]),
+                             hide_index=True, use_container_width=True)
+            st.markdown(f"**Why:** {c['cause']}  \n**Do:** {c['action']}")
+    with st.expander("All warnings, newest first"):
+        for w in reversed(warns):
+            st.write("⚠ " + w)
     st.subheader(f"Signals · {now:%H:%M:%S}")
     machines = line.by_machine(dec)
     labels = {line.decoder.MACHINE_NAMES.get(m, m): m for m in line.MACHINE_ORDER if m in machines}

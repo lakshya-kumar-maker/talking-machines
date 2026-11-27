@@ -128,6 +128,96 @@ def _overlaps(a, b):
     return a[0] <= b[1] and b[0] <= a[1]
 
 
+LABEL = {"vibration": "Vibration", "motor_current": "Motor current", "motor_temp": "Motor temperature",
+         "speed": "Speed", "fill_pressure": "Fill pressure", "cap_torque": "Capping torque",
+         "glue_temp": "Glue temperature"}
+
+
+def alert_cards(df, dec, base=(3, 8), smooth=60):
+    """One explained alert per machine: what changed, since when, how far from normal, likely cause, action.
+    Severity = how serious it is; confidence = how sure we are it's real (how many signals agree, how long)."""
+    names = decoder.MACHINE_NAMES
+    if len(df) < base[1] * 60 + smooth:
+        return []
+    ts = df.set_index("timestamp")
+    sm = ts.rolling(smooth, min_periods=1).mean()
+    healthy = sm.iloc[base[0] * 60:base[1] * 60]
+    mu, sd = healthy.mean(), healthy.std()
+    sp, st = spans(df, dec), status(df, dec)
+    cards = []
+    for i, m in enumerate(MACHINE_ORDER):
+        sig = by_machine(dec).get(m, {})
+        row = st.iloc[i]
+        changed = []
+        for s in ("vibration", "motor_current", "motor_temp"):
+            if s not in sig:
+                continue
+            t = sig[s]
+            floor = max(sd[t], 0.02 * max(abs(mu[t]), 1))
+            z = (sm[t] - mu[t]) / floor
+            above = (z > 6) & (ts[sig["running"]] > 0.5) if "running" in sig else (z > 6)
+            held = above.rolling(smooth).sum() >= smooth - 5
+            if held.any():
+                since = held.idxmax()
+                now_v = sm[t][held].iloc[-1]
+                changed.append({"signal": LABEL[s], "key": s, "since": since, "normal": round(mu[t], 2),
+                                "now": round(now_v, 2), "unit": dec[t]["unit"],
+                                "change_pct": round((now_v - mu[t]) / abs(mu[t]) * 100, 1), "z": round(z[held].iloc[-1], 1)})
+        changed.sort(key=lambda c: c["since"])
+        if not changed and not row["fault"]:
+            continue
+        keys = [c["key"] for c in changed]
+        if keys[:1] == ["vibration"] and len(keys) > 1:
+            cause = "Vibration rose first, then the motor drew more current and heated up: the typical pattern of a wearing bearing or misalignment."
+            action = f"Inspect the {names[m].lower()} motor bearing and alignment; plan a stop before it fails."
+        elif "vibration" in keys:
+            cause = "Vibration is rising on its own: early sign of bearing wear, looseness or imbalance."
+            action = f"Check the {names[m].lower()} for loose parts and bearing noise at the next chance."
+        elif "motor_temp" in keys and "motor_current" in keys:
+            cause = "The motor is working harder and getting hotter: overload or extra friction."
+            action = f"Check the {names[m].lower()} load, lubrication and cooling."
+        elif "motor_temp" in keys:
+            cause = "The motor is heating up without extra load: possible cooling problem."
+            action = "Check the motor fan and cooling path."
+        elif "motor_current" in keys:
+            cause = "The motor draws more current at the same speed: extra friction or a partial jam."
+            action = "Check for jams and lubrication."
+        else:
+            cause = "The machine raised its own fault signal."
+            action = f"Check the {names[m].lower()} fault message on its panel."
+        if row["fault"]:
+            action = (f"Repair the {names[m].lower()} before restarting: "
+                      + action.split(";")[0].replace(f"the {names[m].lower()} ", "its ")[0].lower()
+                      + action.split(";")[0].replace(f"the {names[m].lower()} ", "its ")[1:] + "."
+                      if changed else action)
+            severity = "Critical"
+            title = f"{names[m]}: FAULT, line stopped"
+        elif len(changed) >= 2 or max(c["z"] for c in changed) > 15:
+            severity = "High"
+            title = f"{names[m]}: likely to fail soon"
+        else:
+            severity = "Medium"
+            title = f"{names[m]}: drifting from normal"
+        mins = (ts.index[-1] - changed[0]["since"]).total_seconds() / 60 if changed else 0
+        confidence = "high" if len(changed) >= 2 and mins >= 3 else ("medium" if mins >= 1 else "low")
+        cards.append({"machine": names[m], "title": title, "severity": severity, "confidence": confidence,
+                      "changed": changed, "cause": cause, "action": action,
+                      "first_seen": changed[0]["since"] if changed else None,
+                      "status": "FAULT" if row["fault"] else ("Running" if row["running"] else "Stopped")})
+    # knock-on effects: machines that slowed only because another machine had a fault
+    return cards
+
+
+def explain_card(c):
+    lines = [f"{c['title']}  [{c['severity']} severity, {c['confidence']} confidence]"]
+    for ch in c["changed"]:
+        lines.append(f"  • {ch['signal']}: normal {ch['normal']} → now {ch['now']} {ch['unit']} "
+                     f"({ch['change_pct']:+}%) since {ch['since']:%H:%M}")
+    lines.append(f"  Why: {c['cause']}")
+    lines.append(f"  Do: {c['action']}")
+    return "\n".join(lines)
+
+
 def rule_answer(question, df, dec, warns):
     """A plain-language answer worked out from the data itself, for when no AI service is reachable."""
     q = question.lower()
@@ -214,10 +304,16 @@ def rule_answer(question, df, dec, warns):
 def ask(question, df, dec, warns):
     """Answer a plant question from the data. Groq first, Gemini second, our own rules if both fail."""
     context = facts(df, dec, warns)
+    analysis, _ = rule_answer(question, df, dec, warns)
+    cards = "\n".join(explain_card(c) for c in alert_cards(df, dec)) or "no active alerts"
     prompt = ("You are Talking Machines, an assistant for a bottling-line maintenance engineer. "
               "Answer ONLY from the facts below, in 2-3 short sentences, then list the signals you used "
-              "as 'Signals used: ...'. If the facts don't answer it, say so.\n\n"
-              f"FACTS:\n{context}\n\nQUESTION: {question}")
+              "as 'Signals used: ...'. If the facts don't answer it, say so.\n"
+              "RULES: The ANALYSIS section was computed from the data and is correct about causes: base your "
+              "answer on it. When a machine stops, its speed, current, vibration and temperature drop as a "
+              "result; those drops are effects, not problems. A machine that slowed while another machine had "
+              "a fault was blocked or starved by that machine. Do not invent causes.\n\n"
+              f"ANALYSIS:\n{analysis}\n\nALERTS:\n{cards}\n\nFACTS:\n{context}\n\nQUESTION: {question}")
     errors = []
     try:
         from dotenv import load_dotenv
