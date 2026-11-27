@@ -1,0 +1,5 @@
+.env
+.venv/
+_pycache_/
+data/stream.csv
+data/answers.json
