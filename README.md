@@ -123,20 +123,6 @@ python collector.py --test-write          # prove writes are refused
 - **No hidden guessing:** every answer lists the signals it used; unknown tags are marked as unknown.
 - **Secrets stay out of code:** API keys live only in `.env`, which is in `.gitignore`.
 
-## Files
-
-| File | Job |
-|---|---|
-| `app.py` | Streamlit dashboard: Live line, Tag Translator, PLC Logic, Ask the Line |
-| `simulator.py` | Bottling line + cobot with jams, wear and failure; can act as a Modbus PLC |
-| `plc.py` | Minimal Modbus TCP server and client, standard library only, read-only |
-| `collector.py` | Reads the PLC and keeps the history file, like a plant historian |
-| `plc_programs.py` | Each machine's control program in Structured Text |
-| `decoder.py` | Works out what each tag means from behaviour |
-| `translator.py` | PLC code → plain English |
-| `warning.py` | Drift early warning + AI4I 2020 failure model |
-| `line.py` | Machine status, causes, alert cards, Ask the Line |
-
 ## Project structure
 
 | File | What it does |
@@ -154,11 +140,13 @@ python collector.py --test-write          # prove writes are refused
 | `dependency.py` | Machine dependency map, learned from the data and from the PLC code |
 | `confidence.py` | Measured confidence % for each alert (logistic regression over many simulated runs) |
 | `maintenance.py` | Work orders, checklists, parts and the printable shift report |
-| `line.py` | Ties it all together: machine status, downtime cost, alert cards, Ask the Line answers |
+| `line.py` | Ties it all together: machine status, causes, downtime cost, alert cards, Ask the Line answers |
 | `openplc_export.py` | Exports all six controllers as one program for OpenPLC Runtime |
 | `plant.py` | Plays the machines against a real soft PLC (OpenPLC) over Modbus TCP |
 | `softplc.py` | Small stand-in for OpenPLC, for testing without installing it |
 | `test_llm.py` | Quick check that the Groq and Gemini API keys in `.env` work |
+| `confidence_model.json` | The trained confidence model (weights and test results) that `confidence.py` loads |
+| `OPENPLC_SETUP.md` | Step-by-step guide to running the line on OpenPLC Runtime |
 | `tests/` | pytest suite (see below) |
 
 ## Run the tests
