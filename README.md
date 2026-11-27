@@ -1,4 +1,3 @@
-# talking-machines
 # Talking Machines
 
 **An AI layer that lets old factory machines explain themselves.**

@@ -15,9 +15,9 @@ import streamlit as st
 import line
 
 PATH = "data/stream.csv"
-MIN_ROWS = 180                      # the decoder needs ~3 simulated minutes before names mean anything
+MIN_ROWS = 180                      
 RUN_MINUTES = 45
-REFRESH = 1                       # seconds between live updates
+REFRESH = 1                     
 
 st.set_page_config(page_title="Talking Machines", page_icon="🏭", layout="wide")
 st.markdown("""<style>
@@ -25,15 +25,13 @@ st.markdown("""<style>
 [data-testid="stStatusWidget"] {visibility: hidden;}
 </style>""", unsafe_allow_html=True)
 
-
-# ── the simulated line, running in the background ─────────────────────────
 LOGS = {"proc": "data/simulator.log", "collector": "data/collector.log"}
 
 
 @st.cache_resource
 def line_process():
     """The simulated PLC (and the collector reading it), kept between page refreshes."""
-    atexit.register(stop_line)                       # once per server, not once per script rerun
+    atexit.register(stop_line)                       
     return {"proc": None, "collector": None, "speed": 20, "seed": 7, "mode": "PLC (Modbus TCP)"}
 
 
@@ -41,9 +39,9 @@ def _spawn(key, args):
     """Start a helper process; its output goes to a log file so a crash can be shown on the page."""
     log = open(LOGS[key], "w", encoding="utf-8")
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
-               TM_PARENT_PID=str(os.getpid()))           # the helper exits if this dashboard dies
+               TM_PARENT_PID=str(os.getpid()))           
     line_process()[key] = subprocess.Popen([sys.executable] + args, stdout=log, stderr=subprocess.STDOUT, env=env)
-    log.close()                                      # the child keeps its own handle
+    log.close()                                      
 
 
 def start_line(speed, seed, mode):
@@ -60,7 +58,7 @@ def start_line(speed, seed, mode):
     else:
         _spawn("proc", args)
     lp["speed"], lp["seed"], lp["mode"] = speed, seed, mode
-    time.sleep(1.0)                                  # let the first rows arrive
+    time.sleep(1.0)                                  
 
 
 def stop_line():
@@ -91,7 +89,7 @@ def crashed():
     return out
 
 
-if line_process()["proc"] is None and not line_process().get("stopped"):   # first run: start from 09:00
+if line_process()["proc"] is None and not line_process().get("stopped"):   
     start_line(line_process()["speed"], line_process()["seed"], line_process()["mode"])
 
 with st.sidebar:
@@ -125,7 +123,7 @@ st.title("🏭 Talking Machines")
 st.caption("Bottling line · read-only: it watches the machines and never controls them")
 
 
-# ── reading the data ───────────────────────────────────────────────────────
+
 @st.cache_data(show_spinner=False, max_entries=3)
 def snapshot(bucket):
     df, dec = line.load(PATH)
@@ -137,16 +135,12 @@ def current():
     if not os.path.exists(PATH):
         return None
     try:
-        # reload every few seconds; Windows doesn't update the file's time while the simulator writes it
         return snapshot(int(time.time() // REFRESH))
-    except Exception as e:                           # file being rewritten: try again on the next refresh
+    except Exception as e:                          
         st.info(f"Reading the line… ({e.__class__.__name__})")
         return None
 
-
-# ── live demo: let a judge break a machine ─────────────────────────────────
-INJECT_MIN = 8      # the system learns "normal" from minutes 3-8, so faults can be added after that
-
+INJECT_MIN = 8      
 with st.sidebar:
     st.divider()
     st.header("🔧 Break a machine")
@@ -231,7 +225,6 @@ def live():
             else:
                 st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
 
-    # what the stoppages have cost so far
     d = line.downtime(df, dec, line.PRICE)
     if d:
         st.subheader("Cost of downtime")
@@ -301,7 +294,7 @@ with tab_live:
     live()
 
 
-TAB_REFRESH = 10                    # the side tabs update by themselves every few seconds
+TAB_REFRESH = 10                  
 
 
 @st.fragment(run_every=f"{TAB_REFRESH}s")
