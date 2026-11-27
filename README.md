@@ -187,3 +187,7 @@ Python · pandas · NumPy · scikit-learn · Streamlit · Modbus TCP · Groq (`g
 - The line is simulated, built to behave like a real one. Pointing `collector.py` at a real PLC's IP address is the next step.
 - Decoding is strongest after the line has had at least one stoppage. Before that, look-alike machines are marked low confidence.
 - The PLC translator covers the Structured Text used here (IF/ELSIF/ELSE, assignments, maths, comparisons, TON timers). Ladder logic exported as text is the next step.
+
+## Known limits
+
+- Streamlit is pinned to 1.67; newer versions replace use_container_width with width='stretch'.

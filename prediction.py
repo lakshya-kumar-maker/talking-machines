@@ -182,7 +182,8 @@ def _test(seeds=range(1, 21), before=(10, 7, 5, 3)):
     for seed in seeds:
         subprocess.run([sys.executable, "simulator.py", "--fast", "--seed", str(seed)], check=True, capture_output=True)
         full = pd.read_csv("data/stream.csv", parse_dates=["timestamp"])
-        fail = pd.Timestamp(json.load(open("data/answers.json"))["events"]["filler_fails"])
+        with open("data/answers.json") as f:
+            fail = pd.Timestamp(json.load(f)["events"]["filler_fails"])
         dec, _ = decoder.decode(full)
         limits = translator.trip_limits(dec)
         for b in before:
