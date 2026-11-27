@@ -9,6 +9,7 @@ Works out what every cryptic signal is from HOW IT BEHAVES, without the answer k
 import argparse
 import json
 import re
+import sys
 
 import numpy as np
 import pandas as pd
@@ -18,9 +19,16 @@ NAMES = {"running": ("Running", ""), "fault": ("Fault", ""), "speed": ("Speed", 
          "motor_temp": ("Motor temperature", "°C"), "vibration": ("Vibration", "mm/s"),
          "fill_pressure": ("Fill pressure", "bar"), "cap_torque": ("Capping torque", "Nm"),
          "glue_temp": ("Glue heater temperature", "°C"), "case_count": ("Case counter", "cases"),
-         "layer_count": ("Layer counter", "layers")}
+         "layer_count": ("Layer counter", "layers"),
+         # palletising cobot
+         "gripper_closed": ("Gripper closed", ""), "zone_occupied": ("Safety zone occupied", ""),
+         "cycle_count": ("Cases palletised", "cases"), "tcp_speed": ("Tool speed", "mm/s"),
+         "speed_override": ("Speed override", "%"),
+         "j1_torque": ("Joint 1 (base) torque", "Nm"), "j2_torque": ("Joint 2 (shoulder) torque", "Nm"),
+         "j3_torque": ("Joint 3 (elbow) torque", "Nm"), "j4_torque": ("Joint 4 (wrist 1) torque", "Nm"),
+         "j5_torque": ("Joint 5 (wrist 2) torque", "Nm"), "j6_torque": ("Joint 6 (wrist 3) torque", "Nm")}
 MACHINE_NAMES = {"depalletiser": "Depalletiser", "filler": "Filler", "capper": "Capper",
-                 "labeller": "Labeller", "case_packer": "Case packer"}
+                 "labeller": "Labeller", "case_packer": "Case packer", "cobot": "Cobot"}
 
 
 # ── 1. fingerprint: how each signal behaves ────────────────────────────────
@@ -43,6 +51,9 @@ def fingerprint(s):
 # ── 2. group signals that belong to the same controller block ─────────────
 def address_group(tag):
     """Signals stored next to each other in a PLC usually belong to one machine."""
+    m = re.match(r"(ROB\d+)\.", tag)
+    if m:
+        return m.group(1)                             # robot controller
     m = re.match(r"DB(\d+)\.", tag)
     if m:
         return "DB" + m.group(1)                      # Siemens data block
@@ -130,6 +141,60 @@ def classify_group(df, tags):
     return out, reasons, fp
 
 
+# ── 3b. a robot arm looks different: many joint signals that swing in a repeating cycle ───
+def looks_like_robot(df, tags):
+    fp = {t: fingerprint(df[t]) for t in tags}
+    bools = [t for t in tags if fp[t]["bool"]]
+    reals = [t for t in tags if not fp[t]["bool"] and not fp[t]["counter"]]
+    flips = {t: (df[t].diff().abs().sum() / (len(df) / 60)) for t in bools}
+    return len(reals) >= 6 and any(f >= 4 for f in flips.values())     # a gripper opening and closing
+
+
+def classify_robot(df, tags):
+    fp = {t: fingerprint(df[t]) for t in tags}
+    out, reasons = {}, {}
+    bools = [t for t in tags if fp[t]["bool"]]
+    counters = [t for t in tags if fp[t]["counter"] and not fp[t]["bool"]]
+    reals = [t for t in tags if t not in bools and t not in counters]
+    flips = {t: df[t].diff().abs().sum() / (len(df) / 60) for t in bools}
+
+    # gripper: opens and closes every cycle
+    grip = max(bools, key=lambda t: flips[t])
+    out[grip], reasons[grip] = "gripper_closed", f"switches {flips[grip]:.0f} times a minute (every pick)"
+    for t in counters:
+        out[t], reasons[t] = "cycle_count", f"only goes up, about {fp[t]['rate_per_min']:.1f} per minute"
+    # speed override: only a couple of fixed values, 100 most of the time
+    for t in reals:
+        vals = set(np.unique(df[t].round(1)))
+        if len(vals) <= 4 and fp[t]["max"] <= 100.5 and fp[t]["median"] >= 90:
+            out[t], reasons[t] = "speed_override", f"jumps between {', '.join(f'{v:g}' for v in sorted(vals))}: a speed setting in %"
+    over = next((t for t, n in out.items() if n == "speed_override"), None)
+    left = [t for t in reals if t not in out]
+    # tool speed: the biggest value, and it falls whenever the override drops
+    if left:
+        t = max(left, key=lambda t: fp[t]["median"])
+        out[t], reasons[t] = "tcp_speed", f"around {fp[t]['median']:.0f} and drops with the speed setting"
+        left.remove(t)
+    # joints: the shoulder holds the most weight, then the elbow, the base, then the three wrist joints
+    order = ["j2_torque", "j3_torque", "j1_torque", "j4_torque", "j5_torque", "j6_torque"]
+    for name, t in zip(order, sorted(left, key=lambda t: -abs(fp[t]["median"]))):
+        out[t], reasons[t] = name, (f"about {fp[t]['median']:.0f} Nm, rises when the gripper holds a case; "
+                                    f"ranked by load (shoulder carries most)")
+    # the remaining on/off signals: running is mostly on; the safety zone is on exactly when the speed setting drops
+    rest = [t for t in bools if t != grip]
+    if over is not None:
+        zone = [t for t in rest if (df[t] == 1).any() and (df.loc[df[t] == 1, over] < df[over].max() - 1).mean() > 0.9]
+        if zone:
+            out[zone[0]], reasons[zone[0]] = "zone_occupied", "on exactly when the robot slows to collaborative speed"
+            rest.remove(zone[0])
+    for t in rest:
+        if fp[t]["share_ones"] >= 0.5:
+            out[t], reasons[t] = "running", f"on/off signal, on {fp[t]['share_ones']:.0%} of the time"
+        else:
+            out[t], reasons[t] = "fault", f"on/off signal, on {fp[t]['share_ones']:.0%} of the time"
+    return out, reasons, fp
+
+
 # ── 4. which machine is which, from how the line behaves ───────────────────
 def identify_machines(df, groups, signals):
     ident, why = {}, {}
@@ -166,16 +231,21 @@ def identify_machines(df, groups, signals):
     return ident, why
 
 
-def decode(path="data/stream.csv"):
-    df = pd.read_csv(path).drop(columns=["timestamp"])
+def decode(data="data/stream.csv"):
+    """data: a CSV path or a DataFrame with a timestamp column."""
+    df = data if isinstance(data, pd.DataFrame) else pd.read_csv(data)
+    df = df.drop(columns=["timestamp"], errors="ignore")
     groups = {}
     for t in df.columns:
         groups.setdefault(address_group(t), []).append(t)
     signals, reasons, fps = {}, {}, {}
+    robots = {g for g, tags in groups.items() if looks_like_robot(df, tags)}
     for g, tags in groups.items():
-        s, r, f = classify_group(df, tags)
+        s, r, f = (classify_robot if g in robots else classify_group)(df, tags)
         signals.update(s), reasons.update(r), fps.update(f)
-    machines, mwhy = identify_machines(df, groups, signals)
+    machines, mwhy = identify_machines(df, {g: t for g, t in groups.items() if g not in robots}, signals)
+    for g in robots:
+        machines[g], mwhy[g] = "cobot", "a robot arm: six joint loads that swing with every pick, and a gripper"
     result = {}
     for g, tags in groups.items():
         m = machines[g]
@@ -218,7 +288,8 @@ def llm_check(result, fps):
 
 
 def score(result, answers="data/answers.json"):
-    key = json.load(open(answers))["tags"]
+    with open(answers, encoding="utf-8") as f:
+        key = json.load(f)["tags"]
     ok = [t for t in key if result.get(t, {}).get("machine") == key[t]["machine"]
           and result.get(t, {}).get("signal") == key[t]["signal"]]
     print(f"\nDecoded correctly: {len(ok)} / {len(key)}")
@@ -231,6 +302,7 @@ def score(result, answers="data/answers.json"):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")    # Windows consoles/pipes default to cp1252
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true")
     ap.add_argument("--score", action="store_true")
@@ -238,7 +310,8 @@ if __name__ == "__main__":
     result, fps = decode()
     if a.llm:
         result = llm_check(result, fps)
-    json.dump(result, open("data/decoded.json", "w", encoding="utf-8"), indent=1, ensure_ascii=False)
+    with open("data/decoded.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=1, ensure_ascii=False)
     for t, r in sorted(result.items(), key=lambda kv: (kv[1]["machine"], kv[1]["signal"])):
         print(f"{t:14} → {r['name']:34} {r['unit']:12} [{r['confidence']}]  {r['reason']}")
     print("\nsaved data/decoded.json")

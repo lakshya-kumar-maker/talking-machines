@@ -50,9 +50,13 @@ Z_ALERT = 6
 HOLD = 55            
 
 
-def drift_warnings(path="data/stream.csv", names=None):
-    """names: optional {tag: readable name} from the decoder, used only to make reasons readable."""
-    d = pd.read_csv(path, parse_dates=["timestamp"]).set_index("timestamp")
+def drift_warnings(data="data/stream.csv", names=None):
+    """data: a CSV path or a DataFrame with a timestamp column.
+    names: optional {tag: readable name} from the decoder, used only to make reasons readable."""
+    if isinstance(data, pd.DataFrame):
+        d = data.set_index("timestamp")
+    else:
+        d = pd.read_csv(data, parse_dates=["timestamp"]).set_index("timestamp")
     num = d.loc[:, d.nunique() > 2]                                          
     num = num.loc[:, [c for c in num if not num[c].is_monotonic_increasing]]  
     sm = num.rolling(SMOOTH, min_periods=1).mean()
@@ -103,6 +107,7 @@ def _print_group(group, top=3):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")    # "⚠" crashes cp1252 consoles/pipes
     what = sys.argv[1] if len(sys.argv) > 1 else "stream"
     if what == "ai4i":
         train_ai4i()
@@ -110,5 +115,6 @@ if __name__ == "__main__":
         import json, os
         names = None
         if os.path.exists("data/decoded.json"):
-            names = {t: r["name"] for t, r in json.load(open("data/decoded.json", encoding="utf-8")).items()}
+            with open("data/decoded.json", encoding="utf-8") as f:
+                names = {t: r["name"] for t, r in json.load(f).items()}
         explain(drift_warnings(names=names))

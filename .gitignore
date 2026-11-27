@@ -7,3 +7,6 @@ data/answers.json
 data/*.joblib
 data/decoded.json
 data/_snapshot.csv
+data/plc_map.json
+data/plc_map.json.tmp
+data/*.log

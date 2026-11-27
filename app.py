@@ -1,5 +1,6 @@
 """Talking Machines — dashboard.   Run:  python -m streamlit run app.py
-The simulated bottling line starts by itself in the background from 09:00; use the sidebar to restart it.
+The simulated line starts by itself from 09:00. By default it runs as a PLC on Modbus TCP and a collector
+reads it (read-only), exactly like a real plant; the sidebar can switch to the plain file mode.
 """
 import atexit
 import os
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import time
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -25,49 +27,93 @@ st.markdown("""<style>
 
 
 # ── the simulated line, running in the background ─────────────────────────
+LOGS = {"proc": "data/simulator.log", "collector": "data/collector.log"}
+
+
 @st.cache_resource
 def line_process():
-    """One simulator for the whole app, kept between page refreshes."""
-    return {"proc": None, "speed": 20, "seed": 7}
+    """The simulated PLC (and the collector reading it), kept between page refreshes."""
+    atexit.register(stop_line)                       # once per server, not once per script rerun
+    return {"proc": None, "collector": None, "speed": 20, "seed": 7, "mode": "PLC (Modbus TCP)"}
 
 
-def start_line(speed, seed):
+def _spawn(key, args):
+    """Start a helper process; its output goes to a log file so a crash can be shown on the page."""
+    log = open(LOGS[key], "w", encoding="utf-8")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+    line_process()[key] = subprocess.Popen([sys.executable] + args, stdout=log, stderr=subprocess.STDOUT, env=env)
+    log.close()                                      # the child keeps its own handle
+
+
+def start_line(speed, seed, mode):
     lp = line_process()
     stop_line()
     os.makedirs("data", exist_ok=True)
-    lp["proc"] = subprocess.Popen([sys.executable, "simulator.py", "--speed", str(speed), "--seed", str(seed),
-                                   "--minutes", str(RUN_MINUTES)],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    lp["speed"], lp["seed"] = speed, seed
-    time.sleep(0.5)                                  # let it write its first rows
+    for f in ("data/stream.csv", "data/plc_map.json"):
+        if os.path.exists(f):
+            os.remove(f)
+    args = ["simulator.py", "--speed", str(speed), "--seed", str(seed), "--minutes", str(RUN_MINUTES)]
+    if mode.startswith("PLC"):
+        _spawn("proc", args + ["--plc"])
+        _spawn("collector", ["collector.py", "--rate", str(max(50, speed * 3))])
+    else:
+        _spawn("proc", args)
+    lp["speed"], lp["seed"], lp["mode"] = speed, seed, mode
+    time.sleep(1.0)                                  # let the first rows arrive
 
 
 def stop_line():
-    p = line_process().get("proc")
-    if p and p.poll() is None:
-        p.terminate()
-        try:
-            p.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            p.kill()
+    lp = line_process()
+    for key in ("collector", "proc"):
+        p = lp.get(key)
+        if p and p.poll() is None:
+            p.terminate()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        lp[key] = None
 
 
-atexit.register(stop_line)
-if line_process()["proc"] is None:                   # first time the app runs: start the line from 09:00
-    start_line(line_process()["speed"], line_process()["seed"])
+def crashed():
+    """[(name, last log lines)] for helper processes that exited with an error."""
+    out = []
+    for key, name in (("proc", "simulator"), ("collector", "collector")):
+        p = line_process().get(key)
+        if p is not None and p.poll() not in (None, 0):
+            try:
+                with open(LOGS[key], encoding="utf-8", errors="replace") as f:
+                    tail = "".join(f.readlines()[-8:])
+            except OSError:
+                tail = "(no log)"
+            out.append((name, tail))
+    return out
+
+
+if line_process()["proc"] is None and not line_process().get("stopped"):   # first run: start from 09:00
+    start_line(line_process()["speed"], line_process()["seed"], line_process()["mode"])
 
 with st.sidebar:
     st.header("Simulated line")
     lp = line_process()
     speed = st.select_slider("Speed (simulated seconds per real second)", [5, 10, 20, 30, 60], value=lp["speed"])
     seed = st.number_input("Seed (changes tag names and noise)", value=lp["seed"], step=1)
+    modes = ["PLC (Modbus TCP)", "File only"]
+    mode = st.radio("How Talking Machines reads the line", modes, index=modes.index(lp["mode"]),
+                    help="PLC: the simulator acts as a PLC on Modbus TCP port 5020 and a collector reads it, "
+                         "read-only, like in a real plant. File: the simulator writes the data file directly.")
     if st.button("▶ Restart line from 09:00", use_container_width=True):
-        start_line(speed, int(seed))
+        lp["stopped"] = False
+        start_line(speed, int(seed), mode)
         st.rerun()
     if st.button("■ Stop line", use_container_width=True):
+        lp["stopped"] = True
         stop_line()
-    running = lp["proc"] is not None and lp["proc"].poll() is None
+    alive = lambda p: p is not None and p.poll() is None
+    running = alive(lp["proc"]) and (alive(lp["collector"]) or not lp["mode"].startswith("PLC"))
     st.caption(("🟢 running" if running else "⚪ stopped") + f" · {lp['speed']}× speed · seed {lp['seed']}")
+    if lp["mode"].startswith("PLC"):
+        st.caption("Source: PLC at 127.0.0.1:5020 · Modbus TCP · read-only (writes are refused)")
     st.caption(f"A full run is {RUN_MINUTES} simulated minutes: about "
                f"{RUN_MINUTES * 60 / lp['speed'] / 60:.1f} real minutes at this speed.")
 
@@ -79,7 +125,7 @@ st.caption("Bottling line · read-only: it watches the machines and never contro
 @st.cache_data(show_spinner=False, max_entries=3)
 def snapshot(bucket):
     df, dec = line.load(PATH)
-    warns = line.warning_lines(PATH, dec) if len(df) >= MIN_ROWS else []
+    warns = line.warning_lines(df, dec) if len(df) >= MIN_ROWS else []
     return df, dec, warns
 
 
@@ -113,6 +159,9 @@ tab_live, tab_tags, tab_ask = st.tabs(["Live line", "Tag Translator", "Ask the L
 
 @st.fragment(run_every=f"{REFRESH}s")
 def live():
+    for name, tail in crashed():
+        st.error(f"The {name} stopped with an error. Last lines of its log:")
+        st.code(tail or "(empty)", language=None)
     data = current()
     if data is None:
         st.warning("Starting the line… (if this stays, press ▶ Restart line in the sidebar)")
@@ -134,10 +183,16 @@ def live():
             elif not r["running"]:
                 why = f"Stopped · waiting on {culprit[0]}" if culprit else "Stopped"
                 st.warning(f"**{r['machine']}**  \n{why}")
+            elif r["key"] == "cobot" and r["zone"]:
+                st.info(f"**{r['machine']}**  \nSlowed · person nearby")
             else:
                 st.success(f"**{r['machine']}**  \nRunning")
-            st.metric("Speed (bottles/min)", f"{r['speed']:.0f}" if r["speed"] is not None else "–")
-            st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
+            st.metric(f"Speed ({r['unit']})", f"{r['speed']:.0f}" if r["speed"] is not None else "–")
+            if r["key"] == "cobot":
+                st.caption(f"speed setting {r['override']:.0f}% · "
+                           + ("🧍 person in safety zone" if r["zone"] else "safety zone clear"))
+            else:
+                st.caption(f"{r['current_A']} A · {r['temp_C']} °C · vib {r['vibration']} mm/s")
 
     st.subheader("Why this alert")
     cards = line.alert_cards(df, dec)
@@ -162,10 +217,21 @@ def live():
     labels = {line.decoder.MACHINE_NAMES.get(m, m): m for m in line.MACHINE_ORDER if m in machines}
     pick = st.selectbox("Machine", list(labels), index=1 if len(labels) > 1 else 0, key="pick_machine")
     sig = machines[labels[pick]]
-    wanted = [s for s in ("motor_current", "motor_temp", "vibration") if s in sig]
+    wanted = [s for s in ("motor_current", "motor_temp", "vibration") if s in sig] or \
+             [s for s in ("j2_torque", "j3_torque", "j1_torque") if s in sig]
     recent = df.tail(15 * 60).set_index("timestamp")
-    chart = recent[[sig[s] for s in wanted]].rename(columns={sig[s]: dec[sig[s]]["name"] for s in wanted})
-    st.line_chart(chart, height=280)
+    def short(name):  # "Cobot joint 1 (base) torque" -> "Joint 1 (base) torque"
+        return name[len(pick):].strip().capitalize() if name.lower().startswith(pick.lower() + " ") else name
+    chart = recent[[sig[s] for s in wanted]].rename(columns={sig[s]: short(dec[sig[s]]["name"]) for s in wanted})
+    long = chart.reset_index().melt("timestamp", var_name="Signal", value_name="Value")
+    st.altair_chart(
+        alt.Chart(long).mark_line().encode(
+            x=alt.X("timestamp:T", title=None),
+            y=alt.Y("Value:Q", title=None),
+            color=alt.Color("Signal:N", sort=list(chart.columns),
+                            legend=alt.Legend(orient="bottom", direction="vertical", title=None, labelLimit=0)),
+        ).properties(height=280),
+        use_container_width=True)
     if "speed" in sig:
         st.line_chart(recent[[sig["speed"]]].rename(columns={sig["speed"]: dec[sig["speed"]]["name"]}), height=160)
 
@@ -192,7 +258,8 @@ with tab_tags:
 
 with tab_ask:
     st.write("Ask about the line in plain words. Answers come only from the live data and list the signals used.")
-    st.caption("Try: *Why did the filler slow down?* · *Which machine needs attention?* · *Why did the line stop?*")
+    st.caption("Try: *Why did the filler slow down?* · *Which machine needs attention?* · *Why did the line stop?* "
+               "· *Why did the cobot slow down?*")
     if "chat" not in st.session_state:
         st.session_state.chat = []
     with st.form("ask", clear_on_submit=True):
