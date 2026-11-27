@@ -165,17 +165,40 @@ def rule_answer(question, df, dec, warns):
         return (f"The {names[asked].lower()} slowed or stopped " + "; and ".join(parts) + ".",
                 f"signals: {names[asked]} speed and running, fault flags of every machine")
 
-    if any(w in q for w in ("attention", "fail", "wrong", "problem", "risk", "worry", "check")):
-        drift = [w for w in warns if " up " in w]
-        faults = st[st["fault"]]["machine"].tolist()
-        if faults:
-            return (f"{', '.join(faults)} is in FAULT now." +
-                    (f" It was warned about first at {drift[0].split()[0]}: {drift[0][7:]}." if drift else ""),
+    drifting = {}                                       # machine -> its "up" warnings, oldest first
+    for w in warns:
+        for part in w[7:].split(", "):
+            if " up " in part:
+                m = next((m for m in MACHINE_ORDER if part.startswith(names[m])), None)
+                if m:
+                    drifting.setdefault(m, []).append((w.split()[0], part[len(names[m]) + 1:]))
+    faults_now = [m for m in MACHINE_ORDER if st.loc[MACHINE_ORDER.index(m), "fault"]]
+
+    if not asked and "line" in q and any(w in q for w in ("stop", "down", "why", "happen")):
+        if faults_now:
+            m = faults_now[0]
+            early = drifting.get(m)
+            return (f"The line stopped because the {names[m].lower()} has a fault, and every other machine "
+                    f"waits for it." + (f" It was warned about first at {early[0][0]} ({early[0][1]})." if early else ""),
+                    f"signals: fault flags, {names[m]} running and speed")
+        stopped = [names[m].lower() for m in MACHINE_ORDER if not st.loc[MACHINE_ORDER.index(m), "running"]]
+        if stopped:
+            return f"Right now these are stopped: {', '.join(stopped)}, but no fault light is on.", "signals: running, fault"
+        return "The whole line is running right now.", "signals: running"
+
+    if any(w in q for w in ("attention", "fail", "wrong", "problem", "risk", "worry", "check", "break")):
+        if faults_now:
+            m = faults_now[0]
+            early = drifting.get(m)
+            return (f"The {names[m].lower()} is in FAULT now." +
+                    (f" It was warned about first at {early[0][0]}: {early[0][1]}." if early else ""),
                     "signals: fault, vibration, motor current, motor temperature")
-        if drift:
-            return (f"Keep an eye on what the latest warning names: {drift[-1][7:]} (since {drift[-1].split()[0]}). "
-                    "A rising vibration or temperature like this usually comes before a breakdown.",
-                    "signals: vibration, motor current, motor temperature")
+        if drifting:
+            m = max(drifting, key=lambda m: len(drifting[m]))
+            steps = "; then ".join(f"{what} (since {t})" for t, what in drifting[m])
+            return (f"The {names[m].lower()} needs attention: {steps}. Vibration rising first and then the motor "
+                    "heating up is a typical sign of a wearing bearing, so check it before it fails.",
+                    f"signals: {names[m]} vibration, motor current, motor temperature")
         return "Nothing needs attention: no machine is drifting away from normal.", "signals: all"
 
     if asked:
@@ -184,8 +207,8 @@ def rule_answer(question, df, dec, warns):
         return (f"The {names[asked].lower()} is {state}: {r['speed']} bottles/min, {r['current_A']} A, "
                 f"{r['temp_C']} °C, vibration {r['vibration']} mm/s. It has stopped {r['stops']} times so far.",
                 "signals: running, fault, speed, motor current, motor temperature, vibration")
-    return ("I can answer questions about a machine (filler, capper…), why it slowed down, or what needs "
-            "attention.", "")
+    return ("I can only answer from the line's own data. Ask about a machine (filler, capper…), why it slowed "
+            "down, why the line stopped, or what needs attention.", "")
 
 
 def ask(question, df, dec, warns):
