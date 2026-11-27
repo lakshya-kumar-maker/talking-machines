@@ -90,21 +90,19 @@ def heater_warnings(df: pd.DataFrame, dec: dict) -> list[str]:
     return out
 
 
-def warning_lines(path, dec: dict, window_s: int = 180, top: int = 3) -> list[str]:
-    """Return all early-warning lines (signal drift and heater drops), sorted by time."""
-    lines = _drift_lines(path, dec, window_s, top)
-    try:
-        df = pd.read_csv(SNAP if os.path.exists(SNAP) else path, parse_dates=["timestamp"])
-        lines += heater_warnings(df, dec)
-    except Exception:
-        pass
-    return sorted(lines, key=lambda l: l[:5])
+def warning_lines(data, dec: dict, window_s: int = 180, top: int = 3) -> list[str]:
+    """Early warnings as text lines. data: the stream as a DataFrame (the dashboard), or a CSV path."""
+    if isinstance(data, pd.DataFrame):
+        df = data
+    else:
+        df = pd.read_csv(SNAP if os.path.exists(SNAP) else data, parse_dates=["timestamp"])
+    return sorted(_drift_lines(df, dec, window_s, top) + heater_warnings(df, dec), key=lambda l: l[:5])
 
 
-def _drift_lines(path, dec, window_s=180, top=3):
+def _drift_lines(df, dec, window_s=180, top=3):
     """The same grouped warnings as warning.py prints, returned as text lines."""
     names = {t: r["name"] for t, r in dec.items()}
-    alerts = warning.drift_warnings(SNAP if os.path.exists(SNAP) else path, names=names)
+    alerts = warning.drift_warnings(df, names=names)
     if not alerts.empty:  # the cobot slowing for a person is expected behaviour, not an early warning
         expected = {
             t
