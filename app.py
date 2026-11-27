@@ -154,7 +154,7 @@ def clock(df):
                                          f"{lp['speed']}× speed")
 
 
-tab_live, tab_tags, tab_ask = st.tabs(["Live line", "Tag Translator", "Ask the Line"])
+tab_live, tab_tags, tab_plc, tab_ask = st.tabs(["Live line", "Tag Translator", "PLC Logic", "Ask the Line"])
 
 
 @st.fragment(run_every=f"{REFRESH}s")
@@ -256,10 +256,40 @@ with tab_tags:
         st.dataframe(table, use_container_width=True, hide_index=True, height=560)
 
 
+with tab_plc:
+    import translator
+    data = current()
+    folder = "data/plc_programs"
+    files = sorted(f for f in os.listdir(folder) if f.endswith(".st")) if os.path.isdir(folder) else []
+    if data is None or len(data[0]) < MIN_ROWS or not files:
+        st.info("The PLC Logic translator needs the decoded tag names (about 3 simulated minutes of data).")
+    else:
+        dec = data[1]
+        progs = translator.translate_all(folder, dec)
+        label = lambda f: f"{f}  →  {line.decoder.MACHINE_NAMES.get(progs[f]['machine'], 'unknown machine')}"
+        st.write("Each machine's own control program, read straight from the PLC export. The code uses the plant's "
+                 "cryptic tags and has no comments; we translate it rule by rule using the decoded names.")
+        pick = st.selectbox("Program", files, format_func=label, key="pick_program")
+        t = progs[pick]
+        for n, r in enumerate(t["rules"], 1):
+            left, right = st.columns([1, 1])
+            left.code(r["code"], language="pascal")
+            right.markdown(f"**Rule {n}.** {r['english']}")
+        if t["unknown"]:
+            st.caption("Not decoded (internal flags with no live data): " + ", ".join(t["unknown"]))
+        if st.button("Summarise this program with AI"):
+            with st.spinner("Summarising…"):
+                summary = translator.summarise(t)
+            if summary:
+                st.success(summary)
+            else:
+                st.warning("No AI service reachable; the rule-by-rule translation above is exact.")
+
+
 with tab_ask:
     st.write("Ask about the line in plain words. Answers come only from the live data and list the signals used.")
     st.caption("Try: *Why did the filler slow down?* · *Which machine needs attention?* · *Why did the line stop?* "
-               "· *Why did the cobot slow down?*")
+               "· *Why did the cobot slow down?* · *Is the capper OK?* · *When does the filler's program trip?*")
     if "chat" not in st.session_state:
         st.session_state.chat = []
     with st.form("ask", clear_on_submit=True):

@@ -391,10 +391,28 @@ def rule_answer(question, df, dec, warns):
                 "signals: Cobot running, fault, tool speed, speed setting, safety zone")
     if asked:
         r = st[st["machine"] == names[asked]].iloc[0]
+        nm = names[asked].lower()
         state = "in FAULT" if r["fault"] else ("running" if r["running"] else "stopped")
-        return (f"The {names[asked].lower()} is {state}: {r['speed']} bottles/min, {r['current_A']} A, "
-                f"{r['temp_C']} °C, vibration {r['vibration']} mm/s. It has stopped {r['stops']} times so far.",
-                "signals: running, fault, speed, motor current, motor temperature, vibration")
+        own = drifting.get(asked)
+        healthy = r["running"] and not r["fault"] and not own
+        text = (("Yes, it looks OK now. " if healthy else "No, not right now. ") if " ok" in f" {q}" else "")
+        text += (f"The {nm} is {state}: {r['speed']} bottles/min, {r['current_A']} A, {r['temp_C']} °C, "
+                 f"vibration {r['vibration']} mm/s.")
+        fcol = by_machine(dec).get(asked, {}).get("fault")
+        if fcol:                                   # its own past faults, e.g. capper jams
+            f = df[fcol].astype(int)
+            on = df.index[(f == 1) & (f.shift(1, fill_value=0) == 0)]
+            if len(on):
+                times = ", ".join(f"{df['timestamp'][i]:%H:%M}" for i in on[:5])
+                text += (f" It had its own fault {len(on)} time{'s' if len(on) > 1 else ''} ({times})"
+                         + ("." if r["fault"] else ", each one cleared and it restarted."))
+        if not r["running"] and not r["fault"] and faults_now:
+            text += f" It is stopped only because the {names[faults_now[0]].lower()} has a fault, not because of itself."
+        if own:
+            text += " Warnings: " + "; then ".join(f"{what} (since {t})" for t, what in own) + "."
+        elif r["running"]:
+            text += " Its vibration, motor current and temperature are within normal range."
+        return text, "signals: running, fault, speed, motor current, motor temperature, vibration, warnings"
     return ("I can only answer from the line's own data. Ask about a machine (filler, capper…), why it slowed "
             "down, why the line stopped, or what needs attention.", "")
 

@@ -169,6 +169,8 @@ def simulate(minutes, seed):
 
 
 def write_answers(tags, seed, start, path="data/answers.json"):
+    import plc_programs
+    plc_programs.render(tags)                                   # the machines' PLC code, with this run's tags
     JAM, JAMS, WEAR, FAIL, ZONES = timeline(seed)
     at = lambda s: str(start + timedelta(seconds=s))
     key = {v["tag"]: {k: v[k] for k in ("machine", "signal", "kind", "unit", "vendor_style")} for v in tags.values()}
