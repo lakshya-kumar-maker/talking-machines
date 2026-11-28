@@ -125,7 +125,10 @@ def classify_group(df, tags):
     # heater: high and steady even when the machine stops
     for t in list(left):
         stopped = df.loc[~on, t] if run and (~on).any() else df[t]
-        if fp[t]["median"] > 100 and df[t].diff().abs().median() < 1.5 and stopped.median() > 100:
+        # "stays hot while stopped" only counts with enough stopped time: a few cold seconds at start-up
+        # (a real PLC that starts before its sensors report) must not hide a heater
+        hot_when_stopped = len(stopped) < 60 or stopped.median() > 100
+        if fp[t]["median"] > 100 and df[t].diff().abs().median() < 1.5 and hot_when_stopped:
             # hot, moves only slowly, and stays hot while the machine is stopped (a speed drops to 0)
             take("glue_temp", t, f"steady around {fp[t]['median']:.0f} even when stopped (a heater)")
 
