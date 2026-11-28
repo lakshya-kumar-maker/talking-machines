@@ -33,13 +33,53 @@ st.markdown(
 
 # ── the simulated line, running in the background ─────────────────────────
 LOGS = {"proc": "data/simulator.log", "collector": "data/collector.log"}
+PIDS = "data/pids.json"  # the helper processes this dashboard started, so a new session can stop leftovers
+LOOP_PAUSE = 20  # seconds the finished shift stays on screen before the next one starts
+
+
+def _save_pids():
+    import json
+
+    lp = line_process()
+    pids = {k: lp[k].pid for k in ("proc", "collector") if lp.get(k) is not None and lp[k].poll() is None}
+    try:
+        os.makedirs("data", exist_ok=True)
+        with open(PIDS, "w", encoding="utf-8") as f:
+            json.dump(pids, f)
+    except OSError:
+        pass
+
+
+def _stop_leftovers():
+    """Stop a simulator/plant/collector an earlier dashboard session left running. Two of them writing
+    data/stream.csv at once garbles it (values turn into nan)."""
+    import json
+    import signal
+
+    try:
+        if time.time() - os.path.getmtime(PIDS) > 24 * 3600:  # too old: the numbers may belong to other programs
+            return
+        with open(PIDS, encoding="utf-8") as f:
+            pids = json.load(f)
+    except (OSError, ValueError):
+        return
+    for pid in pids.values():
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (OSError, ValueError):
+            pass  # already gone
+    try:
+        os.remove(PIDS)
+    except OSError:
+        pass
 
 
 @st.cache_resource
 def line_process():
     """The simulated PLC (and the collector reading it), kept between page refreshes."""
     atexit.register(stop_line)  # once per server, not once per script rerun
-    return {"proc": None, "collector": None, "speed": 20, "seed": 7, "mode": "PLC (Modbus TCP)"}
+    _stop_leftovers()
+    return {"proc": None, "collector": None, "speed": 20, "seed": 7, "mode": "PLC (Modbus TCP)", "loop": True}
 
 
 def _spawn(key, args):
@@ -106,6 +146,8 @@ def start_line(speed, seed, mode):
     else:
         _spawn("proc", args)
     lp["speed"], lp["seed"], lp["mode"] = speed, seed, mode
+    lp["ended_at"] = None
+    _save_pids()
     time.sleep(1.0)  # let the first rows arrive
 
 
@@ -121,6 +163,10 @@ def stop_line():
             except subprocess.TimeoutExpired:
                 p.kill()
         lp[key] = None
+    try:
+        os.remove(PIDS)
+    except OSError:
+        pass
 
 
 def crashed():
@@ -186,6 +232,12 @@ with st.sidebar:
     if st.button("■ Stop line", use_container_width=True):
         lp["stopped"] = True
         stop_line()
+    lp["loop"] = st.toggle(
+        "🔁 Start the next shift automatically",
+        value=lp.get("loop", True),
+        help=f"When the shift reaches 09:{RUN_MINUTES:02d}, show the result for {LOOP_PAUSE} s, then start again "
+        "from 09:00 with the same settings.",
+    )
     alive = lambda p: p is not None and p.poll() is None
     running = alive(lp["proc"]) and (alive(lp["collector"]) or lp["mode"] == "File only")
     st.caption(("🟢 running" if running else "⚪ stopped") + f" · {lp['speed']}× speed · seed {lp['seed']}")
@@ -282,6 +334,26 @@ def line_anomaly_flag():
     return anomaly.FLAG
 
 
+def loop_next_shift(df):
+    """When the shift has reached its end, keep the result on screen for LOOP_PAUSE s, then start the next one."""
+    lp = line_process()
+    now = df["timestamp"].iloc[-1]
+    done = (now.hour * 3600 + now.minute * 60 + now.second) - 9 * 3600 >= RUN_MINUTES * 60 - 5
+    if not done or lp.get("stopped") or lp.get("proc") is None:
+        return
+    if not lp.get("loop", True):
+        st.info("Shift finished. Press ▶ Restart line to run it again.")
+        return
+    if not lp.get("ended_at"):
+        lp["ended_at"] = time.time()
+    left = LOOP_PAUSE - (time.time() - lp["ended_at"])
+    if left > 0:
+        st.info(f"Shift finished at 09:{RUN_MINUTES:02d}. The next shift starts from 09:00 in {left:.0f} s.")
+        return
+    st.session_state.pop("inject_log", None)
+    start_line(lp["speed"], lp["seed"], lp["mode"])
+
+
 def clock(df):
     """Draw the line-time metric and the shift progress bar."""
     now = df["timestamp"].iloc[-1]
@@ -313,6 +385,7 @@ def live():
         return
     df, dec, warns = data
     clock(df)
+    loop_next_shift(df)
     if len(df) < MIN_ROWS:
         st.info(f"Listening… {len(df)} seconds of data so far. Names appear after about 3 simulated minutes.")
         return
@@ -336,7 +409,7 @@ def live():
             if r["key"] == "cobot":
                 setting = f"{r['override']:.0f}%" if r["override"] is not None else "–"
                 st.caption(
-                    "speed setting {setting} · "
+                    f"speed setting {setting} · "
                     + ("🧍 person in safety zone" if r["zone"] else "safety zone clear")
                 )
             else:

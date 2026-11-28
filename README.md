@@ -63,7 +63,7 @@ Every number is checked against the simulator's answer key, which the system nev
 | Alerts scored 90 %+ confidence | **157 / 157** were real faults (20 unseen runs with harmless look-alikes) |
 | Alerts scored under 50 % | 76 of 85 were indeed harmless |
 | Failure model on AI4I 2020 (real public dataset) | precision 0.83 · recall 0.84 |
-| Real PLC runtime | a full 45-minute shift on OpenPLC; its own timer tripped the filler |
+| Real PLC runtime | a full 45-minute shift on OpenPLC; its own 10-second vibration timer tripped the filler |
 | Writes the collector can make to the machine | **0** (read-only by design) |
 
 ## How it works
@@ -115,6 +115,10 @@ Start the dashboard. It starts the simulated line and PLC by itself, beginning a
 python -m streamlit run app.py
 ```
 
+The dashboard runs one 45-minute shift (09:00–09:45). With **🔁 Start the next shift automatically** on (the
+default) it shows the result for 20 seconds and starts the next shift by itself. When it starts, it also stops any
+simulator, plant or collector an earlier session left running, so two programs never write the data file at once.
+
 Or run each part by hand:
 
 ```powershell
@@ -140,7 +144,18 @@ disturbances appear. `--calm` turns the disturbances off.
 ### Real PLC (OpenPLC)
 
 `openplc_export.py` turns the machines' programs into one OpenPLC program; `plant.py` plays the machines and their
-sensors; the collector reads OpenPLC exactly as it reads any PLC. Step by step: [OPENPLC_SETUP.md](OPENPLC_SETUP.md).
+sensors (and reconnects if the PLC pauses); the collector reads OpenPLC exactly as it reads any PLC. Step by step:
+[OPENPLC_SETUP.md](OPENPLC_SETUP.md). The seed in the dashboard must match the program uploaded to OpenPLC.
+
+Running on a real PLC runtime found five problems the simulator had hidden, all fixed:
+
+| What happened on OpenPLC | Fix |
+|---|---|
+| The case packer reported 300/min while stopped | its PLC program now sets the speed to 0 |
+| At cold start the glue reads 0 °C and the labeller latched a fault | the PLC clears it once the glue is back at 160 °C |
+| A PLC reports exact speed setpoints, with no noise | the decoder finds motor current over the whole run |
+| A jam keeps the capper running 2 s before the PLC timer trips | vibration is told apart from torque by its jitter |
+| A cold start hid the glue heater from the decoder | a few cold seconds no longer count |
 
 ### Run the tests
 
@@ -192,4 +207,6 @@ Python · pandas · NumPy · scikit-learn · Streamlit · Altair · Modbus TCP �
 - Repair times and parts in the work orders are typical figures for a small bottling line; a plant puts in its own.
 - The PLC translator covers the Structured Text used here (IF/ELSIF/ELSE, assignments, maths, comparisons, TON
   timers). Ladder logic exported as text is the next step.
+- In OpenPLC mode the program uploaded to OpenPLC is made for one seed; another seed needs a new export and upload.
+  The built-in PLC mode takes any seed.
 - Streamlit is pinned to 1.67; newer versions replace `use_container_width` with `width='stretch'`.
