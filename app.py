@@ -334,8 +334,9 @@ def live():
                 st.success(f"**{r['machine']}**  \nRunning")
             st.metric(f"Speed ({r['unit']})", f"{r['speed']:.0f}" if r["speed"] is not None else "–")
             if r["key"] == "cobot":
+                setting = f"{r['override']:.0f}%" if r["override"] is not None else "–"
                 st.caption(
-                    f"speed setting {r['override']:.0f}% · "
+                    "speed setting {setting} · "
                     + ("🧍 person in safety zone" if r["zone"] else "safety zone clear")
                 )
             else:
