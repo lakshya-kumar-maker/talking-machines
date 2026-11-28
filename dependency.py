@@ -98,8 +98,8 @@ def from_code(dec, folder="data/plc_programs"):
             for cond, body in r[1]:
                 for tag, negated in _tags(cond):
                     other = dec.get(tag, {}).get("machine")
-                    if not other or other == me:
-                        continue
+                    if not other or other == me or other not in ORDER or me not in ORDER:
+                        continue  # a machine not identified yet has no place on the map
                     signal = dec[tag]["signal"]
                     when = f"{other.replace('_', ' ')} {'not ' if negated else ''}{'running' if signal == 'running' else signal}"
                     when = when.replace("not running", "stopped") if signal == "running" else when
@@ -152,7 +152,8 @@ def build(df, dec):
     """[{source, target, effect, data: {...}|None, code: {...}|None, status}] in line order."""
     data, code = from_data(df, dec), from_code(dec)
     out = []
-    for key in sorted(set(data) | set(code), key=lambda k: (ORDER.index(k[0]), ORDER.index(k[1]))):
+    for key in sorted(set(data) | set(code), key=lambda k: (ORDER.index(k[0]) if k[0] in ORDER else 99,
+                                                          ORDER.index(k[1]) if k[1] in ORDER else 99)):
         d, c = data.get(key), code.get(key)
         effect = c["effect"] if c else ("stops" if d["stops"] >= d["slows"] else "slows")
         status = "confirmed" if d and c else ("seen in data" if d else "in code, not seen yet")
