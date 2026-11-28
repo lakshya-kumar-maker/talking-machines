@@ -219,6 +219,7 @@ def run(host, port, speed, minutes, map_path, calm=False):
                 if m == "case_packer" and running:
                     case_rate = spd / 60 / 24
             field["JAM_CLEARED"] = bool(get("capper", "fault")) and not jam_now   # the operator clears the jam
+            field["LINE_RESET"] = warm          # a new shift: the operator presses reset (clears last shift's faults)
             # the cobot palletises the cases, at the speed setting the PLC gives it
             zone = any(s0 <= t < s0 + d for s0, d in ZONES)
             override = float(get("cobot", "speed_override", 100.0)) or 100.0

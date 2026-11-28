@@ -36,10 +36,15 @@ def fingerprint(s):
     v = s.astype(float)
     d = v.diff().dropna()
     uniq = set(np.unique(v.round(6)))
+    # a counter only goes up, but real counters get reset (new shift, operator reset), and a PLC can still
+    # show last shift's value for its first scan: allow a few drops if it steps up many times
+    drops, rises = int((d < 0).sum()), int((d > 0).sum())
+    counter = bool(v.is_monotonic_increasing and v.iloc[-1] > v.iloc[0]) or (
+        0 < drops <= 3 and rises >= 20)
     return {
         "bool": uniq <= {0.0, 1.0},
-        "counter": bool(v.is_monotonic_increasing and v.iloc[-1] > v.iloc[0]),
-        "rate_per_min": float((v.iloc[-1] - v.iloc[0]) / (len(v) / 60)),
+        "counter": counter,
+        "rate_per_min": float(d.clip(lower=0).sum() / (len(v) / 60)),
         "mean": float(v.mean()), "median": float(v.median()), "std": float(v.std()),
         "min": float(v.min()), "max": float(v.max()),
         "share_ones": float(v.mean()) if uniq <= {0.0, 1.0} else None,

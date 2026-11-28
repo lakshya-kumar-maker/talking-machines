@@ -21,3 +21,6 @@ data/_conf/
 data/_cut.csv
 baseline.txt
 talking-machines/
+
+data/answers.json
+

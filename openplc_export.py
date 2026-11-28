@@ -74,6 +74,9 @@ def build(seed, mw_base=MW_BASE):
     regmap["JAM_CLEARED"] = {"type": "bool", "scale": 1, "dir": "in", "ident": "JAM_CLEARED", "machine": "capper",
                              "signal": "jam_cleared", "kind": "bool", "addr": mw_base + mw, "loc": f"%MW{mw}",
                              "internal": True}
+    regmap["LINE_RESET"] = {"type": "bool", "scale": 1, "dir": "in", "ident": "LINE_RESET", "machine": "capper",
+                             "signal": "line_reset", "kind": "bool", "addr": mw_base + mw + 1, "loc": f"%MW{mw + 1}",
+                             "internal": True}
     return tags, regmap
 
 
